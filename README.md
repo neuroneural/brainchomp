@@ -29,10 +29,11 @@ normalization.
 Two bundled volumes can be selected from the toolbar:
 
 - `MA_F_15M_20_image.nii.gz` — rodent MRI
-- `camriMouse_sub-012_ses-1_t2w_image_mask.nii.gz` — binary brain mask
+- `camriMouse_sub-012_ses-1_t2w_image.nii.gz` — CAMRI mouse T2-weighted MRI
 
-Both supplied files are `256³` float32 NIfTIs with 0.1 mm isotropic voxel
-spacing, and their headers are served unchanged.
+Both supplied files are min/max-quantized `256³` uint8 NIfTIs with 0.1 mm
+isotropic voxel spacing. Their spatial geometry is preserved from the source
+volumes.
 
 ## Model and runtimes
 
