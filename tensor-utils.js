@@ -738,6 +738,13 @@ export async function generateOutputSlicesV2(
       return brainMask
     }
     case 'Brain_Extraction': {
+      if (modelEntry.returnMaskForExtraction) {
+        const brainMask = new Uint8Array(allOutputSlices3DCC1DimArray.length)
+        for (let i = 0; i < allOutputSlices3DCC1DimArray.length; i++) {
+          brainMask[i] = allOutputSlices3DCC1DimArray[i] !== 0 ? 1 : 0
+        }
+        return brainMask
+      }
       const maskedData = new niftiImage.constructor(allOutputSlices3DCC1DimArray.length)
       for (let i = 0; i < allOutputSlices3DCC1DimArray.length; i++) {
         // Create the mask - 1 where the value is non-zero, 0 where it is zero.
@@ -1206,6 +1213,13 @@ export async function processSegmentationVolume(outLabelVolume, niftiImage, mode
       return brainMask;
     }
     case 'Brain_Extraction': {
+      if (modelEntry.returnMaskForExtraction) {
+        const brainMask = new Uint8Array(segmentationData.length);
+        for (let i = 0; i < segmentationData.length; i++) {
+          brainMask[i] = segmentationData[i] !== 0 ? 1 : 0;
+        }
+        return brainMask;
+      }
       // Preserve the input NIfTI datatype. Rodent samples are float32; forcing
       // them through Uint8Array would collapse their 0..1 intensities.
       const maskedData = new niftiImage.constructor(segmentationData.length);

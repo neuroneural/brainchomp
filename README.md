@@ -6,17 +6,19 @@ on the user's device.
 
 Live app: [neuroneural.net/brainchomp](https://neuroneural.net/brainchomp/)
 
-## Outputs
+## Model and outputs
 
-- **Skull-strip** runs the rodent MeshNet, retains its largest connected
-  foreground component, and saves the original input intensities with
-  non-brain voxels set to zero.
-- **Brainmask** runs the same checkpoint and saves the post-processed binary
-  mask.
+The single **Skull-strip** model runs the rodent MeshNet and retains its largest
+connected foreground component. One inference produces both downloadable
+outputs:
 
-Both outputs are shown as overlays on the dropped image. Skull-strip uses the
-same copper overlay as Brainchop's MindGrab result; Brainmask uses a binary label
-overlay.
+- a skull-stripped image that preserves the input intensities and sets
+  non-brain voxels to zero;
+- a post-processed binary brain mask.
+
+The **Mask** toggle switches the overlay without rerunning inference. The brain
+uses the same copper overlay as Brainchop's MindGrab result; the mask uses a
+binary label overlay. The Save menu always offers both files.
 
 ## Input contract
 

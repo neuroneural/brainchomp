@@ -41,6 +41,7 @@ const sharedRodentModel = {
   enableSeqConv: true,
   textureSize: 0,
   isPostProcessEnable: true,
+  returnMaskForExtraction: true,
   inferenceDelay: 100,
   warning: null
 }
@@ -53,13 +54,5 @@ const inferenceModelsList = [
     modelName: 'Skull-strip',
     description:
       'Extract the rodent brain and save the input intensities with non-brain voxels set to zero.'
-  },
-  {
-    ...sharedRodentModel,
-    id: 2,
-    type: 'Brain_Masking',
-    modelName: 'Brainmask',
-    description:
-      'Extract the rodent brain and save the post-processed binary foreground mask.'
   }
 ]

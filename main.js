@@ -236,6 +236,20 @@ async function main() {
   let nativeInputNV = null;    // volume as loaded (native grid), before conform
   let nativeInputName = "input.nii.gz";
   const sampleSelect = document.getElementById("sampleSelect");
+  const maskToggle = document.getElementById("maskToggle");
+  const modelRunButton = document.getElementById("modelRunButton");
+  let lastBrainMask = null;
+  let lastExtractedBrain = null;
+
+  function clearCachedResult() {
+    lastBrainMask = null;
+    lastExtractedBrain = null;
+    lastInferenceModelEntry = null;
+    if (maskToggle) {
+      maskToggle.checked = false;
+      maskToggle.disabled = true;
+    }
+  }
 
   // --- Drag mode: segmented control (data-drag maps to nv.opts.dragMode) ---
   const dragSegmented = document.getElementById("dragSegmented");
@@ -342,9 +356,9 @@ async function main() {
         • Press <strong>V</strong> to cycle through views.</p>
 
         <p><strong>🐭 Rodent brain extraction</strong><br>
-        Both menu entries run the same 16-channel MeshNet. Skull-strip returns
-        the input intensities inside the extracted brain; Brainmask returns the
-        post-processed binary mask.</p>
+        Skull-strip runs the 16-channel MeshNet once. Use the <strong>Mask</strong>
+        toggle to switch the overlay between the extracted brain and its
+        post-processed binary mask. The Save menu offers both outputs.</p>
         
         <p><em>Inputs must already be 256 × 256 × 256. This version does not resample or conform them.</em></p>
       </div>
@@ -550,6 +564,7 @@ async function main() {
   async function runSelectedInference() {
     if (suppressBackendModals) return; // already running
     suppressBackendModals = true;
+    if (modelRunButton) modelRunButton.disabled = true;
     backendAttemptMessages = [];
     try {
       await runInferenceChain();
@@ -558,6 +573,7 @@ async function main() {
       showModal("Input not supported", escapeHtml(error?.message || String(error)));
     } finally {
       suppressBackendModals = false;
+      if (modelRunButton) modelRunButton.disabled = false;
     }
   }
 
@@ -749,6 +765,21 @@ async function main() {
   }
 
   modelSelect.onchange = runSelectedInference;
+  if (modelRunButton) {
+    modelRunButton.onclick = () => {
+      modelSelect.value = "0";
+      runSelectedInference();
+    };
+  }
+  if (maskToggle) {
+    maskToggle.onchange = () => {
+      if (!lastBrainMask) return;
+      renderCachedOutput().catch((error) => {
+        console.error("Could not switch result overlay:", error);
+        showModal("Overlay error", escapeHtml(error?.message || String(error)));
+      });
+    };
+  }
   // backendSelect.onchange = runSelectedInference; // Removed
 
   // --- Save actions -------------------------------------------------------
@@ -765,15 +796,25 @@ async function main() {
     }
   }
 
-  function saveSegmentationConformed() {
-    if (nv1.volumes.length < 2) { window.alert("No segmentation to save (run a model first)."); return; }
-    // The overlay already carries the right intent from callbackImg: LABEL for
-    // discrete segmentations, none for intensity outputs (e.g. skull-stripped
-    // brain). So save it as-is — don't force LABEL here.
-    const filename = lastInferenceModelEntry?.type === 'Brain_Masking'
-      ? "brainmask.nii.gz"
-      : "skull_stripped_brain.nii.gz";
-    withPristineLabels(() => nv1.volumes[1].saveToDisk(filename));
+  async function saveCachedResult(kind) {
+    if (!lastBrainMask || !lastExtractedBrain) {
+      window.alert("No result to save (run Skull-strip first).");
+      return;
+    }
+    const outputVolume = await nv1.volumes[0].clone();
+    outputVolume.zeroImage();
+    Object.assign(outputVolume.hdr, { scl_inter: 0, scl_slope: 1 });
+    if (kind === "mask") {
+      outputVolume.img = lastBrainMask;
+      outputVolume.hdr.datatypeCode = 2; // DT_UINT8
+      outputVolume.hdr.numBitsPerVoxel = 8;
+      outputVolume.hdr.intent_code = 1002; // NIFTI_INTENT_LABEL
+      outputVolume.saveToDisk("brainmask.nii.gz");
+      return;
+    }
+    outputVolume.img = lastExtractedBrain;
+    outputVolume.hdr.intent_code = 0;
+    outputVolume.saveToDisk("skull_stripped_brain.nii.gz");
   }
 
   function saveConformedInput() {
@@ -927,15 +968,16 @@ async function main() {
   }
 
   const SAVE_OPTIONS = [
-    { act: saveSegmentationConformed, title: "Model output", sub: "skull-stripped image or binary mask", need: "seg" },
+    { act: () => saveCachedResult("brain"), title: "Skull-stripped brain", sub: "input intensities with background set to zero", need: "result" },
+    { act: () => saveCachedResult("mask"), title: "Brain mask", sub: "binary largest-component mask", need: "result" },
     { act: saveConformedInput, title: "Input volume", sub: "the currently loaded 256³ NIfTI", need: "img" },
     { act: saveScene, title: "Scene", sub: "everything, as a .nvd document", need: "img" },
   ];
 
   function openSaveModal() {
     const hasImg = nv1.volumes.length >= 1;
-    const hasSeg = nv1.volumes.length >= 2;
-    const ready = (need) => (need === "seg" ? hasSeg : hasImg);
+    const hasResult = !!lastBrainMask;
+    const ready = (need) => (need === "result" ? hasResult : hasImg);
     const rows = SAVE_OPTIONS.map((o, i) => {
       const dis = ready(o.need) ? "" : " disabled";
       return `<button type="button" class="save-opt${dis}" data-i="${i}"${dis ? " disabled" : ""}>
@@ -1196,6 +1238,7 @@ async function main() {
     nativeInputName = (nativeInputNV && nativeInputNV.name) ? nativeInputNV.name : "input.nii.gz";
     opacitySlider0.oninput();
     modelSelect.value = "-1";
+    if (nv1.volumes.length === 1) clearCachedResult();
   }
 
   async function fetchJSON(fnm) {
@@ -1223,18 +1266,18 @@ async function main() {
     });
   }
 
-  async function callbackImg(img, opts, modelEntry) {
-    lastInferenceModelEntry = modelEntry;
+  async function renderCachedOutput() {
+    if (!lastBrainMask || !lastExtractedBrain || !lastInferenceModelEntry) return;
     await closeAllOverlays();
     resetLabelIsolation();
     const overlayVolume = await nv1.volumes[0].clone();
     overlayVolume.zeroImage();
     Object.assign(overlayVolume.hdr, { scl_inter: 0, scl_slope: 1 });
-    overlayVolume.img = img;
 
     lastSegLabelNames = null;
     lastSegColors = null;
-    if (modelEntry.type === 'Brain_Masking') {
+    if (maskToggle?.checked) {
+      overlayVolume.img = lastBrainMask;
       const newLabels = ["Background", "Brain Mask"];
       lastSegLabelNames = newLabels.slice();
       const newR = [0, 217];
@@ -1245,37 +1288,27 @@ async function main() {
       overlayVolume.hdr.datatypeCode = 2; // DT_UINT8
       overlayVolume.hdr.numBitsPerVoxel = 8;
       overlayVolume.hdr.intent_code = 1002; // NIFTI_INTENT_LABEL
-    } else if (modelEntry.colormapPath) {
-      const roiVolumes = await getUniqueValuesAndCounts(overlayVolume.img);
-      const cmap = await fetchJSON(modelEntry.colormapPath);
-      lastSegLabelNames = cmap["labels"] ? cmap["labels"].slice() : null;
-      lastSegColors = { R: cmap["R"], G: cmap["G"], B: cmap["B"] };
-      const pd = nv1.volumes[0].hdr.pixDims || [];
-      const voxelVolMm3 = (pd[1] && pd[2] && pd[3]) ? pd[1] * pd[2] * pd[3] : 1;
-      const newLabels = await createLabeledCounts(roiVolumes, cmap["labels"], voxelVolMm3);
-      overlayVolume.setColormapLabel({ R: cmap["R"], G: cmap["G"], B: cmap["B"], labels: newLabels });
-      overlayVolume.hdr.intent_code = 1002; // NIFTI_INTENT_LABEL
     } else {
-      let colormap = opts.atlasSelectedColorTable.toLowerCase();
-
-      // Custom: Use copper2 for Brain Extraction models
-      if (modelEntry.type === 'Brain_Extraction') {
-        colormap = 'copper2';
-      }
-
-      if (!nv1.colormaps().includes(colormap)) colormap = "actc";
-      overlayVolume.colormap = colormap;
+      overlayVolume.img = lastExtractedBrain;
+      overlayVolume.hdr.intent_code = 0;
+      overlayVolume.colormap = nv1.colormaps().includes("copper2") ? "copper2" : "actc";
     }
     overlayVolume.opacity = opacitySlider1.value / 255;
     await nv1.addVolume(overlayVolume);
+  }
 
-    // One-line discoverability hint (only for multi-label overlays where
-    // isolation applies). It sits in the location bar until the next mouse move.
-    if (segOverlay() && lastSegLabelNames && lastSegLabelNames.length > 2) {
-      const loc = document.getElementById("location");
-      if (loc) loc.innerHTML =
-        `<p style="font-size:14px;margin:0;opacity:.75;">Tip: Option/Alt-click a region to show only it — Esc restores all</p>`;
+  async function callbackImg(img, opts, modelEntry) {
+    lastInferenceModelEntry = modelEntry;
+    lastBrainMask = new Uint8Array(img.length);
+    lastExtractedBrain = new nv1.volumes[0].img.constructor(img.length);
+    const inputImage = nv1.volumes[0].img;
+    for (let i = 0; i < img.length; i++) {
+      const foreground = img[i] !== 0 ? 1 : 0;
+      lastBrainMask[i] = foreground;
+      lastExtractedBrain[i] = inputImage[i] * foreground;
     }
+    if (maskToggle) maskToggle.disabled = false;
+    await renderCachedOutput();
   }
 
   async function reportTelemetry(statData) {
@@ -1406,7 +1439,7 @@ async function main() {
   nv1.setInterpolation(true);
 
   async function loadExample(url) {
-    lastInferenceModelEntry = null;
+    clearCachedResult();
     while (nv1.volumes.length) {
       await nv1.removeVolume(nv1.volumes[nv1.volumes.length - 1]);
     }

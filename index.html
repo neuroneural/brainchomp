@@ -12,7 +12,8 @@
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
 
   <!-- Favicon -->
-  <link rel="icon" type="image/x-icon" href="favicon.ico" />
+  <link rel="icon" type="image/png" href="./brainchomp-icon.png" />
+  <link rel="apple-touch-icon" href="./brainchomp-logo.png" />
 
   <!-- Preload critical CSS -->
   <link rel="preload" href="./niivue.css" as="style" />
@@ -24,6 +25,8 @@
 
 <body>
   <header>
+
+    <img class="brand-mark" src="./brainchomp-logo.png" alt="Brainchomp" title="Brainchomp" />
 
     <!-- Opacity: two mini sliders stacked to save horizontal space -->
     <div class="opacity-stack" title="Layer opacity">
@@ -48,9 +51,18 @@
 
     <span class="tb-divider"></span>
 
-    <select id="modelSelect" class="model-select" title="Choose a segmentation model to run">
+    <button id="modelRunButton" class="tb-btn model-run" type="button" title="Run rodent skull stripping">
+      Skull-strip
+    </button>
+    <select id="modelSelect" hidden aria-hidden="true">
       <option value="-1" disabled selected>Loading models...</option>
     </select>
+
+    <label class="mask-toggle" title="Switch the result overlay between the skull-stripped brain and binary mask">
+      <input id="maskToggle" type="checkbox" disabled />
+      <span class="mask-toggle-track" aria-hidden="true"><span></span></span>
+      <span class="mask-toggle-label">Mask</span>
+    </label>
 
     <span class="tb-divider"></span>
 
