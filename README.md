@@ -23,8 +23,9 @@ binary label overlay. The Save menu always offers both files.
 ## Input contract
 
 This version intentionally does not conform or resample inputs. NIfTI volumes
-must already be `256 × 256 × 256`. Model preprocessing is min/max
-normalization.
+must already be `256 × 256 × 256`. Model preprocessing uses the 2nd and 98th
+intensity percentiles with a `1e-3` denominator guard and clipping to `[0, 1]`,
+matching MindGrab in brainchop-cli.
 
 Two bundled volumes can be selected from the toolbar:
 

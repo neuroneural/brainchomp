@@ -36,7 +36,9 @@ const sharedRodentModel = {
   enableCrop: false,
   cropPadding: 0,
   autoThreshold: 0,
-  enableQuantileNorm: false,
+  // Match the MindGrab preprocessing used by brainchop-cli: 2nd/98th
+  // percentiles, a 1e-3 denominator guard, and clipping to [0, 1].
+  enableQuantileNorm: true,
   filterOutWithPreMask: false,
   enableSeqConv: true,
   textureSize: 0,

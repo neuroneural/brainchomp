@@ -146,10 +146,34 @@ export async function binarizeVolumeDataTensor(volumeDataTensor) {
   return volumeDataTensor.step(alpha)
 }
 
-async function calculateQuantiles(tensor, lowerQuantile = 0.01, upperQuantile = 0.99) {
-  // OPTIMIZED: Download flat tensor to CPU, then sample and sort on CPU.
-  // This avoids tf.gather on large tensors which causes memory issues in WebGL.
-  // Still much faster than sorting all 16M+ elements since we only sort the sample.
+function linearQuantileFromHistogram(histogram, count, quantile) {
+  const rank = (count - 1) * quantile
+  const lowerRank = Math.floor(rank)
+  const upperRank = Math.ceil(rank)
+
+  let cumulative = 0
+  let lowerValue = 0
+  let upperValue = 0
+  let lowerFound = false
+
+  for (let value = 0; value < histogram.length; value++) {
+    cumulative += histogram[value]
+    if (!lowerFound && cumulative > lowerRank) {
+      lowerValue = value
+      lowerFound = true
+    }
+    if (cumulative > upperRank) {
+      upperValue = value
+      break
+    }
+  }
+
+  return lowerValue + (upperValue - lowerValue) * (rank - lowerRank)
+}
+
+async function calculateQuantiles(tensor, lowerQuantile = 0.02, upperQuantile = 0.98) {
+  // Download once to CPU. This avoids tf.gather on a 16M-voxel tensor, which
+  // causes avoidable GPU memory pressure immediately before inference.
   const flatTensor = tensor.flatten()
   const totalSize = flatTensor.shape[0]
 
@@ -157,32 +181,54 @@ async function calculateQuantiles(tensor, lowerQuantile = 0.01, upperQuantile = 
   const flatData = await flatTensor.data()
   flatTensor.dispose()
 
-  // Sample on CPU - no GPU memory issues
-  const sampleSize = Math.min(100000, totalSize)
-  let sampleArray
-
-  if (sampleSize >= totalSize) {
-    // Use all elements
-    sampleArray = Array.from(flatData)
-  } else {
-    // Random sampling on CPU
-    sampleArray = new Array(sampleSize)
-    for (let i = 0; i < sampleSize; i++) {
-      const randomIndex = Math.floor(Math.random() * totalSize)
-      sampleArray[i] = flatData[randomIndex]
+  // Brainchomp's bundled examples are uint8. For uint8-like data an exact
+  // histogram is both faster and more reproducible than the old random sample,
+  // and reproduces NumPy's default linearly interpolated quantile.
+  const histogram = new Uint32Array(256)
+  let isUint8 = true
+  for (let i = 0; i < totalSize; i++) {
+    const value = flatData[i]
+    if (!Number.isFinite(value)) {
+      throw new Error('Cannot percentile-normalize a volume containing NaN or Infinity')
+    }
+    if (value < 0 || value > 255 || value !== Math.trunc(value)) {
+      isUint8 = false
+    } else {
+      histogram[value]++
     }
   }
 
-  // Sort only the sample on CPU (100k elements is fast)
-  sampleArray.sort((a, b) => a - b)
+  if (isUint8) {
+    return {
+      qmin: linearQuantileFromHistogram(histogram, totalSize, lowerQuantile),
+      qmax: linearQuantileFromHistogram(histogram, totalSize, upperQuantile)
+    }
+  }
 
-  // Calculate quantile indices on the sample
-  const numElements = sampleArray.length
-  const lowIndex = Math.floor(numElements * lowerQuantile)
-  const highIndex = Math.ceil(numElements * upperQuantile) - 1
+  // Uploaded float volumes can be much larger than is practical to sort in a
+  // browser. Use a deterministic, evenly spaced sample instead of Math.random
+  // so repeated runs and both browser backends receive the same scaling.
+  const sampleSize = Math.min(100000, totalSize)
+  const sample = new Float32Array(sampleSize)
+  const scale = sampleSize > 1 ? (totalSize - 1) / (sampleSize - 1) : 0
+  for (let i = 0; i < sampleSize; i++) {
+    const value = flatData[Math.round(i * scale)]
+    if (!Number.isFinite(value)) {
+      throw new Error('Cannot percentile-normalize a volume containing NaN or Infinity')
+    }
+    sample[i] = value
+  }
+  sample.sort()
 
-  const qminValue = sampleArray[lowIndex]
-  const qmaxValue = sampleArray[highIndex]
+  const interpolate = (quantile) => {
+    const rank = (sampleSize - 1) * quantile
+    const lower = Math.floor(rank)
+    const upper = Math.ceil(rank)
+    return sample[lower] + (sample[upper] - sample[lower]) * (rank - lower)
+  }
+
+  const qminValue = interpolate(lowerQuantile)
+  const qmaxValue = interpolate(upperQuantile)
 
   return { qmin: qminValue, qmax: qmaxValue }
 }
@@ -899,16 +945,31 @@ function processTensorInChunks(inputTensor, filterWeights, chunkSize) {
   return accumulatedResult
 }
 
-export async function quantileNormalizeVolumeData(tensor, lowerQuantile = 0.05, upperQuantile = 0.95) {
+export async function quantileNormalizeVolumeData(
+  tensor,
+  lowerQuantile = 0.02,
+  upperQuantile = 0.98,
+  denominatorEpsilon = 1e-3
+) {
+  if (!(lowerQuantile >= 0 && lowerQuantile < upperQuantile && upperQuantile <= 1)) {
+    throw new Error(`Invalid normalization percentiles: ${lowerQuantile}, ${upperQuantile}`)
+  }
+
   // Call calculateQuantiles and wait for the result
   const { qmin, qmax } = await calculateQuantiles(tensor, lowerQuantile, upperQuantile)
+  console.log(
+    `[Normalization] ${lowerQuantile * 100}-${upperQuantile * 100} percentiles: ` +
+    `low=${qmin}, high=${qmax}, epsilon=${denominatorEpsilon}, clip=[0,1]`
+  )
 
   // Perform the operation: (tensor - qmin) / (qmax - qmin)
   // Break up chained operations to properly dispose intermediate tensors
-  const range = qmax - qmin
+  const range = qmax - qmin + denominatorEpsilon
   const shifted = tensor.sub(qmin)
-  const resultTensor = shifted.div(range)
+  const scaled = shifted.div(range)
+  const resultTensor = scaled.clipByValue(0, 1)
   shifted.dispose() // Dispose intermediate tensor to prevent memory leak
+  scaled.dispose()
 
   // Return the resulting tensor (caller is responsible for disposing input tensor)
   return resultTensor
