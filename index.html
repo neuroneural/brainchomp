@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- DNS prefetch for external resources -->
+  <link rel="dns-prefetch" href="//cdnjs.cloudflare.com" />
+
+  <!-- Preconnect to external domains -->
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/x-icon" href="favicon.ico" />
+
+  <!-- Preload critical CSS -->
+  <link rel="preload" href="./niivue.css" as="style" />
+  <link rel="stylesheet" href="./niivue.css" />
+
+  <title>Brainchomp — rodent brain extraction</title>
+  <script type="module" crossorigin src="./assets/index-DOXR7rjK.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/vendor-gTbkpY2o.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-math-CA38DMGy.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-niivue-Czlz1REu.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-tf-DGuKl8vL.js">
+  <link rel="stylesheet" crossorigin href="./assets/index-BAixXV4u.css">
+</head>
+
+<body>
+  <header>
+
+    <!-- Opacity: two mini sliders stacked to save horizontal space -->
+    <div class="opacity-stack" title="Layer opacity">
+      <div class="opacity-row">
+        <span class="opacity-label">BG</span>
+        <input type="range" min="0" max="255" value="255" class="mini-slider" id="opacitySlider0"
+          aria-label="Background opacity" />
+      </div>
+      <div class="opacity-row">
+        <span class="opacity-label">OVL</span>
+        <input type="range" min="0" max="255" value="128" class="mini-slider" id="opacitySlider1"
+          aria-label="Overlay opacity" />
+      </div>
+    </div>
+
+    <span class="tb-divider"></span>
+
+    <select id="sampleSelect" class="model-select" title="Choose a bundled example volume">
+      <option value="./examples/MA_F_15M_20_image.nii.gz">Example: rodent MRI</option>
+      <option value="./examples/camriMouse_sub-012_ses-1_t2w_image_mask.nii.gz">Example: binary brain mask</option>
+    </select>
+
+    <span class="tb-divider"></span>
+
+    <select id="modelSelect" class="model-select" title="Choose a segmentation model to run">
+      <option value="-1" disabled selected>Loading models...</option>
+    </select>
+
+    <span class="tb-divider"></span>
+
+    <!-- Interaction mode: compact icon toggle (values map to nv.opts.dragMode) -->
+    <div class="segmented segmented-icons" id="dragSegmented" role="group" aria-label="Mouse drag mode">
+      <button type="button" data-drag="3" title="Pan / zoom" aria-label="Pan / zoom">
+        <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+          <path d="M12 2v20M2 12h20" />
+          <path d="M9 5l3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3" />
+        </svg>
+      </button>
+      <button type="button" data-drag="1" title="Brightness / contrast" aria-label="Brightness / contrast">
+        <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+      <button type="button" data-drag="2" title="Measure a distance" aria-label="Measure a distance">
+        <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+          <rect x="2.5" y="8.5" width="19" height="7" rx="1" />
+          <path d="M7 8.5v3M11 8.5v4M15 8.5v3M19 8.5v3" />
+        </svg>
+      </button>
+      <button type="button" data-drag="4" class="active" title="Drag to reslice in 3D" aria-label="Reslice in 3D">
+        <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+          <path d="M12 2.5l8.5 4.9v9.2L12 21.5l-8.5-4.9V7.4z" />
+          <path d="M12 12v9.5M3.5 7l8.5 5 8.5-5" />
+        </svg>
+      </button>
+    </div>
+
+    <!-- Draw tools: single button opening a popover -->
+    <div class="popover-wrap">
+      <button type="button" id="drawBtn" class="tb-btn" aria-haspopup="true" aria-expanded="false"
+        title="Drawing tools">
+        <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+          <path d="M4 20l4-1L20 7a2 2 0 0 0-3-3L5 16l-1 4z" />
+          <path d="M14 6l4 4" />
+        </svg>Draw
+      </button>
+      <div id="drawPopover" class="popover" hidden>
+        <div class="popover-section">
+          <span class="popover-title">Pen</span>
+          <div class="popover-row" id="penRow">
+            <button type="button" data-pen="-1" class="chip active">Off</button>
+            <button type="button" data-pen="2" class="chip">Draw</button>
+            <button type="button" data-pen="10" class="chip">Filled</button>
+            <button type="button" data-pen="0" class="chip">Erase</button>
+          </div>
+        </div>
+        <div class="popover-section">
+          <span class="popover-title">Apply to segmentation</span>
+          <div class="popover-row" id="drawApplyRow">
+            <button type="button" data-apply="1" class="chip">Append</button>
+            <button type="button" data-apply="2" class="chip">Remove</button>
+            <button type="button" data-apply="0" class="chip">Undo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <span class="tb-flex"></span>
+
+    <!-- Outputs -->
+    <button type="button" id="saveBtn" class="tb-btn" title="Save segmentation, input, or scene">
+      <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+        <path d="M12 3v12" />
+        <path d="M7 11l5 5 5-5" />
+        <path d="M4 21h16" />
+      </svg>Save
+    </button>
+    <button type="button" id="saveStatsBtn" class="tb-btn"
+      title="Per-label volume and intensity statistics (min/max/quartiles/mean/stdev), viewable and saveable as CSV">
+      <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+        <path d="M5 21V10" />
+        <path d="M12 21V4" />
+        <path d="M19 21v-7" />
+      </svg>Stats
+    </button>
+
+    <span class="tb-divider"></span>
+
+    <button type="button" id="diagnosticsBtn" class="tb-icon-btn" title="Diagnostics" aria-label="Diagnostics">
+      <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+        <path d="M4 12h4l2 5 4-10 2 5h4" />
+      </svg>
+    </button>
+    <button type="button" id="aboutBtn" class="tb-icon-btn" title="About" aria-label="About">
+      <svg viewBox="0 0 24 24" class="tb-ico" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v5" />
+        <path d="M12 7.5v.5" />
+      </svg>
+    </button>
+  </header>
+
+  <main id="canvas-container">
+    <canvas id="gl1"></canvas>
+  </main>
+
+  <footer>
+    <div class="footer-content">
+      <div class="footer-item" id="location">Drop a pre-conformed 256³ rodent NIfTI</div>
+
+      <div class="footer-status">
+        <div class="footer-item">
+          <progress id="modelProgress" value="0" max="100" title="Model progress"></progress>
+        </div>
+
+        <div class="footer-item">
+          <span id="memstatus" class="status-text" style="color: #4CAF50" title="Memory status">Memory OK</span>
+        </div>
+
+        <div class="footer-item">
+          <span id="backendStatus" class="status-text" style="color: #9aa0a6; cursor: help"
+            title="Detecting backend...">Checking&hellip;</span>
+        </div>
+
+        <a class="star-link" href="https://github.com/neuroneural/brainchomp" target="_blank"
+          title="Star brainchomp on GitHub">
+          <span class="github-star">
+            <span class="star-glyph">&#9733;</span>
+            <span id="star-count">0</span>
+          </span>
+        </a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Custom Modal Dialog -->
+  <dialog id="appDialog">
+    <button id="dialogXBtn" class="dialog-x" type="button" aria-label="Close">&times;</button>
+    <h3 id="dialogTitle">Message</h3>
+    <div id="dialogMessage"></div>
+    <button id="dialogCloseBtn" type="button">Close</button>
+  </dialog>
+
+</body>
+
+</html>
