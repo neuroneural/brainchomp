@@ -25,13 +25,6 @@ const sharedRodentModel = {
   path: '/models/rodent/model.json',
   webgpu_safetensor: './models/rodent/model.safetensors',
   webgpu_runner: 'rodent',
-  // The former WebGPU export rescaled every hidden convolution by roughly
-  // 52-92x to keep fp16 GroupNorm below its overflow threshold. GroupNorm's
-  // fixed epsilon makes that transformation inexact in low-variance
-  // background regions, visibly enlarging a connected false-positive in the
-  // CAMRI sample. The native WebGL2 runner uses the original fp32 weights and
-  // arithmetic and currently has the best PyTorch parity for this checkpoint.
-  preferWebGL2: true,
   forceFP32: false,
   webgpuStorageSize: 536870912,
   numClasses: 2,

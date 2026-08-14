@@ -30,12 +30,6 @@ let backendAttemptMessages = [];
 // `isWebGpuAvailable && !FORCE_WEBGL2_TESTING` guard in runSelectedInference().
 const FORCE_WEBGL2_TESTING = new URLSearchParams(window.location.search).get("backend") === "webgl2";
 
-// A model may prefer the native WebGL2 runner for numerical parity even when
-// WebGPU is available. Brainchomp currently contains one such model, so reflect
-// the backend users will actually run in the status indicator from startup.
-const MODEL_PREFERS_WEBGL2 = inferenceModelsList.length > 0 &&
-  inferenceModelsList.every((model) => model.preferWebGL2 === true);
-
 // Set true to skip the NATIVE WebGL2 runner (webgl2_runners/) and force the old
 // tfjs WebWorker path. This is the A/B control for the native runner: with
 // FORCE_WEBGL2_TESTING=true, flipping this false/true switches between the two
@@ -170,11 +164,7 @@ async function initializeBackend() {
   // Update UI with backend status
   // While FORCE_WEBGL2_TESTING is on, report WebGL even if WebGPU initialized,
   // so the indicator matches the path actually used.
-  updateBackendStatusUI(
-    isWebGpuAvailable && !FORCE_WEBGL2_TESTING && !MODEL_PREFERS_WEBGL2,
-    diagnostics,
-    MODEL_PREFERS_WEBGL2
-  );
+  updateBackendStatusUI(isWebGpuAvailable && !FORCE_WEBGL2_TESTING, diagnostics);
 
   if (!isWebGpuAvailable) {
     console.log('Falling back to WebGL backend.');
@@ -188,7 +178,7 @@ async function initializeBackend() {
 /**
  * Updates the UI to display the current backend status.
  */
-function updateBackendStatusUI(webgpuAvailable, diagnostics, webglPreferred = false) {
+function updateBackendStatusUI(webgpuAvailable, diagnostics) {
   const statusEl = document.getElementById('backendStatus');
   if (!statusEl) {
     console.log('Backend status element not found in DOM');
@@ -205,9 +195,7 @@ function updateBackendStatusUI(webgpuAvailable, diagnostics, webglPreferred = fa
     statusEl.style.color = '#FF9800'; // Orange
 
     // Build helpful tooltip
-    let tooltip = webglPreferred
-      ? 'WebGL2 backend selected for numerical parity with the fp32 checkpoint'
-      : 'WebGL backend (fallback)';
+    let tooltip = 'WebGL backend (fallback)';
     if (diagnostics.error) {
       tooltip += `\nReason: ${diagnostics.error}`;
     }
@@ -609,8 +597,7 @@ async function main() {
     const niftiImage = nv1.volumes[0].img;
 
     // 1. Try WebGPU  (skipped while FORCE_WEBGL2_TESTING is true)
-    if (isWebGpuAvailable && !FORCE_WEBGL2_TESTING &&
-        !modelEntry.preferWebGL2 && modelEntry.webgpu_safetensor) {
+    if (isWebGpuAvailable && !FORCE_WEBGL2_TESTING && modelEntry.webgpu_safetensor) {
       console.log("Attempting WebGPU backend...");
 
       // Get UI state for TTA
