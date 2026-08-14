@@ -1,0 +1,864 @@
+/* Modern, Clean, Responsive CSS for BrainChop */
+:root {
+  --primary-color: #007bff;
+  --bg-color: #202020;
+  /* Dark Background */
+  --text-color: #ffffff;
+  /* White Text */
+  --header-bg: #333333;
+  /* Dark Header */
+  --footer-bg: #333333;
+  /* Dark Footer */
+  --border-radius: 4px;
+  --spacing: 0.5rem;
+  --input-bg: #ffffff;
+  --input-text: #000000;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* Lock body to viewport to fix mobile bottom bar visibility */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--text-color);
+  background-color: var(--bg-color);
+  overflow: hidden;
+  /* Prevent body scroll, canvas handles it */
+}
+
+/* Reset aggressive styles from niivue.css */
+div {
+  background-color: transparent;
+}
+
+/* Header — compact single-row toolbar, grouped by function */
+header {
+  margin: 0;
+  background: linear-gradient(180deg, #363636 0%, #2c2c2c 100%);
+  padding: 0 14px;
+  height: 56px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  color: var(--text-color);
+}
+
+/* Spacers / dividers */
+.tb-flex {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+.tb-divider {
+  width: 1px;
+  height: 26px;
+  background: #4a4a4a;
+  flex: 0 0 auto;
+}
+
+/* Generic toolbar buttons */
+.tb-btn,
+.tb-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border: 0.5px solid #565b61;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6e8ea;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.tb-icon-btn {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+
+.tb-btn:hover,
+.tb-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: #7a8087;
+}
+
+.tb-btn:active,
+.tb-icon-btn:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tb-ico {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: 0 0 auto;
+}
+
+/* Opacity: two mini sliders stacked */
+.opacity-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.opacity-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.opacity-label {
+  width: 26px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #9aa4af;
+}
+
+.mini-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 84px;
+  height: 4px;
+  border-radius: 999px;
+  background: #4a5058;
+  outline: none;
+  margin: 0;
+  cursor: pointer;
+}
+
+.mini-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e6e8ea;
+  border: none;
+  cursor: pointer;
+}
+
+.mini-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e6e8ea;
+  border: none;
+  cursor: pointer;
+}
+
+/* Segmented control (drag mode) */
+.segmented {
+  display: inline-flex;
+  background: #1f242b;
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.segmented button {
+  padding: 5px 11px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9aa4af;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.segmented button:hover {
+  color: #e6e8ea;
+}
+
+.segmented button.active {
+  background: #3a424c;
+  color: #fff;
+}
+
+/* Compact icon-only variant */
+.segmented-icons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 9px;
+}
+
+.segmented-icons .tb-ico {
+  width: 16px;
+  height: 16px;
+}
+
+/* Popover (draw tools) */
+.popover-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  min-width: 200px;
+  padding: 12px;
+  background: #2b3038;
+  border: 0.5px solid #565b61;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.popover[hidden] {
+  display: none;
+}
+
+.popover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.popover-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #9aa4af;
+}
+
+.popover-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 5px 11px;
+  border: 0.5px solid #565b61;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd2d9;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.chip.active {
+  background: #185fa5;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* Model selector — the primary control, subtly accented */
+.model-select {
+  height: 36px;
+  max-width: 320px;
+  padding: 0 34px 0 14px;
+  border: 1px solid #3b82f6;
+  border-radius: 9px;
+  background-color: rgba(59, 130, 246, 0.08);
+  color: #e6e8ea;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  text-overflow: ellipsis;
+}
+
+.model-select:hover {
+  background-color: rgba(59, 130, 246, 0.16);
+}
+
+.model-select option {
+  background-color: #2b3038;
+  color: #e6e8ea;
+}
+
+/* Main Canvas Area */
+main#canvas-container {
+  flex-grow: 1;
+  position: relative;
+  overflow: hidden;
+  background-color: #000;
+}
+
+canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+/* Footer — slim, informative status bar (fixed height across aspect ratios) */
+footer {
+  margin: 0;
+  background: linear-gradient(180deg, #363636 0%, #2c2c2c 100%);
+  padding: 0 14px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 500;
+  border-top: 1px solid #4a4a4a;
+  flex-shrink: 0;
+  color: var(--text-color);
+}
+
+.footer-content {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: 16px;
+}
+
+.footer-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Left: location / coordinate readout — takes remaining space and truncates */
+#location {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 12px;
+  line-height: 1;
+  font-weight: 500;
+  color: #c9ccd1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Stable numeric columns so the bar doesn't jitter as coordinates change */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+#location .loc-seg {
+  display: inline-block;
+}
+
+#location .loc-sep {
+  opacity: 0.3;
+  padding: 0 2px;
+}
+
+/* First segment (coordinate group) reads as the primary value */
+#location .loc-seg:first-child {
+  color: #f2f4f7;
+  font-weight: 600;
+}
+
+/* Right: status cluster — never shrinks */
+.footer-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 0 0 auto;
+}
+
+/* Status text with a colored indicator dot driven by the element's own color.
+   main.js sets .style.color on these; currentColor keeps the dot in sync and
+   the dot survives textContent/innerHTML updates because it's a pseudo-element. */
+.status-text {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status-text::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 5px currentColor;
+  flex-shrink: 0;
+}
+
+/* Progress Bar — slim rounded pill, always visible */
+progress {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  height: 6px;
+  width: 90px;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+progress::-webkit-progress-bar {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+progress::-webkit-progress-value {
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+progress::-moz-progress-bar {
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 999px;
+}
+
+/* GitHub star — the only interactive element in the bar */
+.star-link {
+  text-decoration: none;
+}
+
+.github-star {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  font-weight: 700;
+  color: #e8eaed;
+  line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.github-star:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.github-star .star-glyph {
+  color: #f7c948;
+  font-size: 13px;
+}
+
+/* Override niivue.css's ID-specific star styling (white box, borders). */
+.github-star #star-count {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  border-radius: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #e8eaed;
+}
+
+/* Narrow screens: tighten spacing, shrink progress, collapse status labels to
+   dots (their titles still carry the full text on hover/long-press). */
+@media (max-width: 600px) {
+  .footer-content {
+    gap: 10px;
+  }
+
+  .footer-status {
+    gap: 12px;
+  }
+
+  progress {
+    width: 56px;
+  }
+
+  .status-text {
+    font-size: 0;
+  }
+
+  .status-text::before {
+    width: 9px;
+    height: 9px;
+    margin-right: 0;
+  }
+}
+
+/* Loading Indicator */
+.loading-spinner::after {
+  content: " \23F3";
+  /* Hourglass */
+  animation: spin 2s linear infinite;
+  display: inline-block;
+}
+
+/* Header responsiveness: the toolbar can scroll horizontally on narrow screens
+   rather than wrapping into a tall block. Labels on the segmented control drop
+   to icons-only isn't needed since the whole row scrolls. */
+@media (max-width: 820px) {
+  header {
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  header::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tb-flex {
+    flex: 0 0 8px;
+    min-width: 8px;
+  }
+
+  .model-select {
+    max-width: 220px;
+  }
+
+  .tb-btn span,
+  .segmented button {
+    white-space: nowrap;
+  }
+}
+
+/* Save picker: borderless option list — click an option to save (no buttons) */
+.save-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  /* Fixed, centered block so the 2×2 stays symmetric regardless of the shared
+     dialog's actual width (which the stats panel also drives). */
+  width: 460px;
+  max-width: 100%;
+  margin: 4px auto 0;
+}
+
+/* Save picker sizing: compact, content-height (not the tall flex column the
+   stats panel needs). Scoped via .dialog-save so other modals are unaffected. */
+/* [open].dialog-save (id+attr+class) outranks the runtime-injected
+   #appDialog[open] stats rules, so the save picker lays out as a plain,
+   content-height block centered in the viewport — not the tall flex column. */
+#appDialog[open].dialog-save {
+  display: block;
+  width: 520px;
+  max-width: 94vw;
+  max-height: 90vh;
+  /* Let the UA modal centering (position:fixed; inset:0; margin:auto) handle
+     both axes — now that this is a plain block, it centers cleanly. */
+  inset: 0;
+  margin: auto;
+}
+
+#appDialog[open].dialog-save #dialogMessage {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* Top-right close affordance (all modals) */
+.dialog-x {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #aaa;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.dialog-x:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.save-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  height: 100%;
+  padding: 14px 16px;
+  border: 0.5px solid #565b61;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6e8ea;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.save-opt:hover {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: #3b82f6;
+}
+
+.save-opt.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.save-opt-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.save-opt-sub {
+  font-size: 12px;
+  color: #9aa4af;
+}
+
+/* Modal Dialog */
+dialog {
+  padding: 1.5rem;
+  border: 1px solid #555;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  max-width: 500px;
+  width: 90%;
+  font-family: inherit;
+  background-color: #333;
+  /* Dark modal */
+  color: white;
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+dialog h3 {
+  margin-top: 0;
+  color: #fff;
+  border-bottom: 1px solid #555;
+  padding-bottom: 0.5rem;
+}
+
+dialog p {
+  color: #ddd;
+  white-space: pre-wrap;
+  /* Preserve newlines in messages */
+}
+
+dialog button {
+  background-color: #e0e0e0;
+  color: black;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  margin-top: 1rem;
+  float: right;
+  cursor: pointer;
+}
+
+dialog button:hover {
+  background-color: #fff;
+}
+/* ===========================================================================
+   Narrow (phone) viewports.
+
+   `body.nv-narrow` is toggled from responsive-layout.js, which measures the
+   visual viewport (and pointer coarseness) rather than trusting a bare media
+   query, so a resized desktop window, a rotated tablet, and the mobile URL bar
+   collapsing all land in the same state. The goal here is simply to give the
+   canvas more pixels: the toolbar and status bar cost ~94px of height on a
+   screen that only has ~700.
+   =========================================================================== */
+
+/* Pane switcher — hidden entirely on roomy screens (the 2x2 multiplanar view
+   is fine there); on phones it floats over the bottom of the canvas so one tap
+   expands a single plane to the full canvas. */
+.pane-switcher {
+  display: none;
+}
+
+body.nv-narrow .pane-switcher {
+  /* Class selectors outrank niivue.css's global `div { display: table-row } */
+  display: flex;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  z-index: 5;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(24, 26, 30, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.pane-switcher button {
+  min-width: 36px;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #cfd3d8;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pane-switcher button.active {
+  background: rgba(59, 130, 246, 0.9);
+  color: #fff;
+}
+
+/* Reset is an action, not a pane: separated by a hairline and never highlighted */
+.pane-switcher .pane-reset {
+  margin-left: 3px;
+  padding: 0 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0 999px 999px 0;
+  font-size: 15px;
+  color: #9aa4af;
+}
+
+.pane-switcher .pane-reset:active {
+  color: #fff;
+}
+
+/* Slim chrome: ~94px of header+footer becomes ~68px, all of it going to the
+   image. Controls stay finger-sized (>=30px) and the toolbar keeps its
+   horizontal scroll from the 820px query above. */
+body.nv-narrow header {
+  height: 44px;
+  padding: 0 8px;
+  gap: 8px;
+}
+
+body.nv-narrow .tb-btn,
+body.nv-narrow .tb-icon-btn {
+  height: 30px;
+  font-size: 12px;
+  gap: 5px;
+}
+
+body.nv-narrow .tb-btn {
+  padding: 0 9px;
+}
+
+body.nv-narrow .tb-icon-btn {
+  width: 30px;
+}
+
+body.nv-narrow .tb-ico {
+  width: 15px;
+  height: 15px;
+}
+
+body.nv-narrow .tb-divider {
+  height: 20px;
+}
+
+body.nv-narrow .model-select {
+  height: 30px;
+  max-width: 180px;
+  padding: 0 28px 0 10px;
+  font-size: 12px;
+  background-position: right 9px center;
+}
+
+body.nv-narrow .opacity-stack {
+  gap: 3px;
+}
+
+body.nv-narrow .opacity-row {
+  gap: 5px;
+}
+
+body.nv-narrow .opacity-label {
+  width: 20px;
+  font-size: 9px;
+}
+
+body.nv-narrow .mini-slider {
+  width: 56px;
+}
+
+body.nv-narrow .segmented-icons button {
+  height: 30px;
+}
+
+body.nv-narrow footer {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+body.nv-narrow .footer-content {
+  gap: 8px;
+}
+
+body.nv-narrow #location {
+  font-size: 11px;
+  gap: 8px;
+}
+
+body.nv-narrow progress {
+  width: 44px;
+}
+
+/* ===========================================================================
+   Touch gestures. A two-finger pinch used to scale the whole DOCUMENT (nothing
+   set touch-action and the viewport meta allows user scaling), which shrank the
+   entire app and could only be undone by reloading -- JS cannot set the visual
+   viewport scale back. `pan-x pan-y` keeps one-finger panning and drops the
+   browser's pinch-zoom and double-tap-zoom; the canvas takes `none` so niivue
+   sees every touch. Older iOS Safari ignores this, so touch-view.js also
+   cancels the gesture* events.
+   =========================================================================== */
+html,
+body {
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+main#canvas-container,
+#gl1 {
+  touch-action: none;
+}
