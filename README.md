@@ -39,13 +39,17 @@ volumes.
 
 The single checkpoint is a 25-block MeshNet with 16 hidden channels,
 non-affine per-channel GroupNorm, GELU, and two output classes. Foreground is
-class 1. The app prefers the generated fp16 WebGPU runner and falls back to the
-native WebGL2 runner. A TF.js model is retained as a final compatibility
-fallback.
+class 1. The app currently prefers the native WebGL2 runner, using the original
+fp32 checkpoint weights and fp32 GroupNorm arithmetic. A TF.js model is retained
+as a compatibility fallback.
 
-The WebGPU export uses the low-memory Brainchop pipeline: fp16 activation
-storage, fp32-safe GroupNorm conditioning, and fused two-class argmax. The
-largest individual activation buffer is 512 MiB.
+The earlier fp16 WebGPU export used aggressively rescaled convolution weights
+to avoid fp16 GroupNorm overflow. Because GroupNorm has a fixed epsilon, that
+rescaling is not exactly invariant in low-variance background regions and
+enlarged a connected false-positive on the CAMRI sample. WebGPU remains disabled
+for this model until the generated backend can keep fp16 activation storage
+while performing numerically stable fp32 GroupNorm arithmetic with the original
+weights.
 
 ## Development
 
