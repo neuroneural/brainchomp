@@ -20,12 +20,12 @@
   <link rel="stylesheet" href="./niivue.css" />
 
   <title>Brainchomp — rodent brain extraction</title>
-  <script type="module" crossorigin src="./assets/index-DAlzv_BO.js"></script>
+  <script type="module" crossorigin src="./assets/index-cG89PAy3.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-gTbkpY2o.js">
-  <link rel="modulepreload" crossorigin href="./assets/vendor-math-CA38DMGy.js">
-  <link rel="modulepreload" crossorigin href="./assets/vendor-niivue-Czlz1REu.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-math-Cp3_ovwH.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-niivue-Cdme4TKu.js">
   <link rel="modulepreload" crossorigin href="./assets/vendor-tf-DGuKl8vL.js">
-  <link rel="stylesheet" crossorigin href="./assets/index-COscdkdq.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-D0STYhNN.css">
 </head>
 
 <body>
@@ -99,6 +99,8 @@
       </button>
     </div>
 
+    <button type="button" id="sculptBtn" class="tb-btn" disabled aria-pressed="false" title="Sculpt the brain mask with a local surface grab">Sculpt</button>
+
     <!-- Draw tools: single button opening a popover -->
     <div class="popover-wrap">
       <button type="button" id="drawBtn" class="tb-btn" aria-haspopup="true" aria-expanded="false"
@@ -165,7 +167,7 @@
   </header>
 
   <main id="canvas-container">
-    <canvas id="gl1"></canvas>
+    <div id="slice-view"><canvas id="gl1"></canvas></div>
   </main>
 
   <footer>
