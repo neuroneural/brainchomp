@@ -94,6 +94,8 @@
       </button>
     </div>
 
+    <button type="button" id="sculptBtn" class="tb-btn" disabled aria-pressed="false" title="Sculpt the brain mask with a local surface grab">Sculpt</button>
+
     <!-- Draw tools: single button opening a popover -->
     <div class="popover-wrap">
       <button type="button" id="drawBtn" class="tb-btn" aria-haspopup="true" aria-expanded="false"
@@ -160,7 +162,7 @@
   </header>
 
   <main id="canvas-container">
-    <canvas id="gl1"></canvas>
+    <div id="slice-view"><canvas id="gl1"></canvas></div>
   </main>
 
   <footer>

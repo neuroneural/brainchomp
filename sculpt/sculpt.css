@@ -1,0 +1,166 @@
+#slice-view {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+/* NiiVue has a global div { display: table-row } rule. Keep the initial
+   canvas measurable even before the sculpt flex layout is enabled. */
+#canvas-container:not(.sculpting) > #slice-view {
+  position: absolute;
+  inset: 0;
+}
+#canvas-container.sculpting {
+  display: flex;
+}
+.sculpting #slice-view {
+  position: relative;
+  overflow: hidden;
+  width: 52%;
+}
+#sculpt-panel {
+  width: 48%;
+  min-width: 320px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #101214;
+  border-left: 1px solid #454545;
+  color: #eee;
+  font-size: 12px;
+}
+#sculpt-panel[hidden] {
+  display: none;
+}
+.sculpt-bar,
+.sculpt-size {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px;
+  flex-wrap: wrap;
+}
+.sculpt-bar {
+  border-bottom: 1px solid #35383a;
+}
+.sculpt-bar strong {
+  margin-right: auto;
+  font-size: 13px;
+}
+#sculpt-panel button {
+  background: #292c2e;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+#sculpt-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+#sculpt-panel button[aria-pressed="true"],
+#sculptBtn[aria-pressed="true"] {
+  border-color: #f5df42;
+  color: #f5df42;
+}
+#sculpt-panel button:focus-visible,
+.sculpt-surface:focus-visible {
+  outline: 2px solid #f5df42;
+  outline-offset: -2px;
+}
+.sculpt-modes {
+  display: flex;
+  gap: 3px;
+}
+.sculpt-size label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+}
+.sculpt-size input {
+  width: 90px;
+  accent-color: #e7cf3b;
+}
+.sculpt-size output {
+  min-width: 62px;
+  color: #ddd;
+  font-variant-numeric: tabular-nums;
+}
+.sculpt-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 140px;
+  overflow: hidden;
+}
+.sculpt-viewport canvas {
+  position: absolute;
+  inset: 0;
+}
+.sculpt-surface {
+  touch-action: none;
+  cursor: crosshair;
+}
+.sculpt-cursor {
+  pointer-events: none;
+}
+.sculpt-help,
+.sculpt-status {
+  margin: 0;
+  padding: 7px 12px;
+  line-height: 1.45;
+}
+.sculpt-help {
+  color: #b5b7b9;
+  border-top: 1px solid #35383a;
+}
+.sculpt-status {
+  min-height: 32px;
+  color: #e8d878;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 760px) {
+  #canvas-container.sculpting {
+    flex-direction: column;
+  }
+  .sculpting #slice-view {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    height: 45%;
+  }
+  #sculpt-panel {
+    width: 100%;
+    height: 55%;
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid #454545;
+  }
+  .sculpt-bar,
+  .sculpt-size {
+    padding: 5px 8px;
+  }
+  .sculpt-help {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+  .sculpt-status {
+    padding: 4px 8px;
+    min-height: 22px;
+  }
+}
+
+/* Disabled state must remain unmistakable in the existing toolbar theme. */
+#sculptBtn:disabled {
+  color: #777;
+  border-color: #444;
+  background: #292929;
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}

@@ -8,7 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "npx playwright test",
-    "pretest": "vite build"
+    "pretest": "vite build",
+    "test:sculpt": "node --test tests/sculpt-unit.mjs",
+    "test:sculpt:browser": "node tests/sculpt-browser.mjs",
+    "test:sculpt:app": "node tests/sculpt-app-smoke.mjs"
   },
   "dependencies": {
     "@niivue/niivue": "^0.62.0",

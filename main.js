@@ -1,3 +1,4 @@
+import { installSculptEditor } from "./sculpt/editor.js";
 import { Niivue } from "@niivue/niivue";
 import { runInference as runInferenceTfjsMain } from "./brainchop-mainthread.js";
 import { runInferenceWebGpu } from "./inference-webgpu.js";
@@ -238,12 +239,15 @@ async function main() {
   const sampleSelect = document.getElementById("sampleSelect");
   const maskToggle = document.getElementById("maskToggle");
   const modelRunButton = document.getElementById("modelRunButton");
+  let sculptEditor = null;
   let lastBrainMask = null;
   let lastExtractedBrain = null;
 
   function clearCachedResult() {
+    sculptEditor?.invalidate();
     lastBrainMask = null;
     lastExtractedBrain = null;
+    sculptEditor?.updateAvailability();
     lastInferenceModelEntry = null;
     if (maskToggle) {
       maskToggle.checked = false;
@@ -287,6 +291,7 @@ async function main() {
       window.alert("No segmentation open (run a model first).");
       return;
     }
+    if (sculptEditor?.active) return;
     if (mode === 0) { // undo
       nv1.drawUndo();
       return;
@@ -296,7 +301,9 @@ async function main() {
       return;
     }
     const img = nv1.volumes[1].img;
-    const draw = await nv1.saveImage({ filename: "", isSaveDrawing: true });
+    // Pass RAS drawing bytes directly to the writer: NiiVue 0.62 saveImage
+    // and its NVImage writer otherwise both reorient non-RAS drawings.
+    const draw = await nv1.volumes[0].saveToDisk("", nv1.drawBitmap);
     const niiHdrBytes = 352;
     const nvox = img.length;
     if (mode === 1) { // append
@@ -305,6 +312,19 @@ async function main() {
     if (mode === 2) { // remove
       for (let i = 0; i < nvox; i++) if (draw[niiHdrBytes + i] > 0) img[i] = 0;
     }
+    // Drawing and sculpting share the binary mask; extracted intensities derive
+    // from that mask instead of becoming a separately edited output.
+    if (lastBrainMask && maskToggle?.checked) {
+      lastBrainMask.set(img);
+      for (let i = 0; i < nvox; i++) lastExtractedBrain[i] = nv1.volumes[0].img[i] * lastBrainMask[i];
+    } else if (lastBrainMask) {
+      // Applying a drawing while viewing extracted intensities still edits the mask.
+      for (let i = 0; i < nvox; i++) if (draw[niiHdrBytes + i] > 0) {
+        lastBrainMask[i] = mode === 1 ? 1 : 0;
+        lastExtractedBrain[i] = nv1.volumes[0].img[i] * lastBrainMask[i];
+      }
+    }
+    sculptEditor?.invalidate();
     nv1.closeDrawing();
     nv1.updateGLVolume();
     nv1.setDrawingEnabled(false);
@@ -417,6 +437,7 @@ async function main() {
   };
 
   opacitySlider1.oninput = function () {
+    if (sculptEditor?.active) { nv1.setDrawOpacity(opacitySlider1.value / 255); return; }
     nv1.setOpacity(1, opacitySlider1.value / 255);
   };
 
@@ -546,6 +567,7 @@ async function main() {
   // isolated label restores the full view. Shared by Alt-click, the stats
   // panel, and Esc.
   function isolateLabel(labelVal) {
+    if (sculptEditor?.active) return;
     if (!segOverlay()) return;
     isolatedLabel = (labelVal === 0 || labelVal === isolatedLabel) ? null : labelVal;
     applyLabelIsolation();
@@ -562,8 +584,9 @@ async function main() {
 
   // Wrapper: owns the "is a fallback still possible" state for callbackUI.
   async function runSelectedInference() {
-    if (suppressBackendModals) return; // already running
+    if (suppressBackendModals || sculptEditor?.active) return; // already running or editing
     suppressBackendModals = true;
+    sculptEditor?.updateAvailability();
     if (modelRunButton) modelRunButton.disabled = true;
     backendAttemptMessages = [];
     try {
@@ -573,6 +596,7 @@ async function main() {
       showModal("Input not supported", escapeHtml(error?.message || String(error)));
     } finally {
       suppressBackendModals = false;
+      sculptEditor?.updateAvailability();
       if (modelRunButton) modelRunButton.disabled = false;
     }
   }
@@ -797,6 +821,7 @@ async function main() {
   }
 
   async function saveCachedResult(kind) {
+    if (sculptEditor?.busy) return;
     if (!lastBrainMask || !lastExtractedBrain) {
       window.alert("No result to save (run Skull-strip first).");
       return;
@@ -969,7 +994,7 @@ async function main() {
 
   const SAVE_OPTIONS = [
     { act: () => saveCachedResult("brain"), title: "Skull-stripped brain", sub: "input intensities with background set to zero", need: "result" },
-    { act: () => saveCachedResult("mask"), title: "Brain mask", sub: "binary largest-component mask", need: "result" },
+    { act: () => saveCachedResult("mask"), title: "Brain mask", sub: "binary mask, including accepted edits", need: "result" },
     { act: saveConformedInput, title: "Input volume", sub: "the currently loaded 256³ NIfTI", need: "img" },
     { act: saveScene, title: "Scene", sub: "everything, as a .nvd document", need: "img" },
   ];
@@ -1298,6 +1323,7 @@ async function main() {
   }
 
   async function callbackImg(img, opts, modelEntry) {
+    sculptEditor?.invalidate();
     lastInferenceModelEntry = modelEntry;
     lastBrainMask = new Uint8Array(img.length);
     lastExtractedBrain = new nv1.volumes[0].img.constructor(img.length);
@@ -1309,6 +1335,7 @@ async function main() {
     }
     if (maskToggle) maskToggle.disabled = false;
     await renderCachedOutput();
+    sculptEditor?.updateAvailability();
   }
 
   async function reportTelemetry(statData) {
@@ -1375,6 +1402,29 @@ async function main() {
 
   const nv1 = new Niivue(defaults);
   await nv1.attachTo("gl1");
+  sculptEditor = installSculptEditor({
+    nv: nv1,
+    getState: () => lastBrainMask ? {
+      mask: lastBrainMask, dims: nv1.volumes[0].hdr.dims.slice(1, 4),
+      affine: nv1.volumes[0].hdr.affine, running: suppressBackendModals,
+    } : null,
+    prepare: async () => {
+      resetLabelIsolation();
+      maskToggle.checked = true;
+      await renderCachedOutput();
+    },
+    onPatch: ({ rect }) => {
+      const [x0, y0, x1, y1] = rect;
+      const [nx, ny, nz] = nv1.volumes[0].hdr.dims.slice(1, 4);
+      const source = nv1.volumes[0].img;
+      for (let z = 0; z < nz; z++) for (let y = y0; y <= y1; y++)
+        for (let x = x0; x <= x1; x++) {
+          const i = x + nx * (y + ny * z);
+          lastExtractedBrain[i] = source[i] * lastBrainMask[i];
+        }
+    },
+    onError: error => showModal("Sculpting", escapeHtml(error.message)),
+  });
   // Alt/Option-click a region to isolate it (see handleIsolateClick).
   nv1.gl.canvas.addEventListener("click", handleIsolateClick);
 

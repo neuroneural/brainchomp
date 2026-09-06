@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #111;
+        color: white;
+        font: 14px sans-serif;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        height: 40px;
+      }
+      #canvas-container {
+        flex: 1;
+        min-height: 0;
+        position: relative;
+        overflow: hidden;
+      }
+      canvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <button id="sculptBtn">Sculpt</button><button id="saveBtn">Save</button
+      ><button id="saveStatsBtn">Stats</button>
+    </header>
+    <main id="canvas-container">
+      <div id="slice-view"><canvas id="gl1"></canvas></div>
+    </main>
+    <script type="module" src="./sculpt_page.js"></script>
+  </body>
+</html>
