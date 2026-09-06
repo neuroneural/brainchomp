@@ -114,6 +114,76 @@ try {
       ),
       0,
     );
+    // Topology edits must keep the RAS drawing, canonical mask, and derived
+    // intensities coherent across undo/redo and cancellation.
+    await page.locator('[data-mode="scoop"]').click();
+    const countBefore = await page.evaluate(() =>
+      fixture.mask.reduce((n, v) => n + v, 0),
+    );
+    await page.mouse.click(x, y);
+    await page.waitForFunction(() => !fixture.editor.busy);
+    const countAfter = await page.evaluate(() =>
+      fixture.mask.reduce((n, v) => n + v, 0),
+    );
+    assert.ok(countAfter < countBefore, "scoop must remove foreground voxels");
+    assert.equal(
+      await page.evaluate(async () => {
+        const bytes = await fixture.nv.volumes[0].saveToDisk(
+          "",
+          fixture.nv.drawBitmap,
+        );
+        return fixture.mask.reduce(
+          (n, v, i) =>
+            n +
+            (v !== bytes[352 + i] || fixture.brain[i] !== fixture.img[i] * v),
+          0,
+        );
+      }),
+      0,
+      "scoop exports and live slices must agree with the corrected mask",
+    );
+    await page.locator('[data-action="undo"]').click();
+    await page.waitForFunction(() => !fixture.editor.busy);
+    assert.equal(
+      await page.evaluate(() =>
+        fixture.mask.reduce((n, v, i) => n + (v !== fixture.accepted[i]), 0),
+      ),
+      0,
+    );
+    await page.locator('[data-action="redo"]').click();
+    await page.waitForFunction(() => !fixture.editor.busy);
+    await page.evaluate(() => {
+      fixture.cut = fixture.mask.slice();
+    });
+    await page.mouse.move(x + 20, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 35, y + 20, { steps: 8 });
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await page.waitForFunction(() => !fixture.editor.busy);
+    assert.equal(
+      await page.evaluate(() =>
+        fixture.mask.reduce((n, v, i) => n + (v !== fixture.cut[i]), 0),
+      ),
+      0,
+    );
+    await page.locator('[data-control="lock"]').check();
+    const anchor = await page
+      .locator("#sculpt-panel")
+      .getAttribute("data-anchor");
+    await page.mouse.move(x + 70, y + 50);
+    assert.equal(
+      await page.locator("#sculpt-panel").getAttribute("data-anchor"),
+      anchor,
+    );
+    await page.locator('[aria-label="Crosshair opacity"]').fill("0");
+    assert.equal(await page.locator("[data-opacity]").innerText(), "0%");
+    await page.locator('[data-mode="grab"]').click();
+    assert.match(
+      await page.locator(".sculpt-anchor").innerText(),
+      /Surface anchor/,
+    );
+    await page.locator('[data-control="lock"]').uncheck();
     await page.locator('[data-action="done"]').click();
     await page.locator("#sculptBtn").click();
     await page.waitForFunction(() => !fixture.editor.busy);

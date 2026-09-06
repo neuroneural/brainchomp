@@ -1,3 +1,4 @@
+import { nearestSurface } from "./targeting.js";
 import { mat4, vec3 } from "gl-matrix";
 import {
   defaultOrientation,
@@ -40,6 +41,13 @@ export class SurfaceRenderer {
     this.canvas = canvas;
     this.overlay = overlay;
     this.positions = mesh.positions;
+    this.indices = mesh.indices;
+    this.worldPositions = new Float32Array(mesh.positions.length);
+    for (let i = 0; i < mesh.positions.length; i += 3)
+      this.worldPositions.set(
+        transform(affine, mesh.positions.subarray(i, i + 3)),
+        i,
+      );
     this.normals = mesh.normals;
     this.affine = affine;
     const gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
@@ -101,6 +109,7 @@ export class SurfaceRenderer {
     this.initialScale = this.scale;
     this.orientation = defaultOrientation();
     this.crosshair = null;
+    this.crosshairOpacity = 0.45;
     this.cursor = null;
     this.framebuffer = gl.createFramebuffer();
     this.textures = [gl.createTexture(), gl.createTexture()];
@@ -212,6 +221,7 @@ export class SurfaceRenderer {
     ];
   }
   drawCursor() {
+    this.onCursorChange?.(this.cursor);
     const ctx = this.overlay.getContext("2d");
     ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
     this.drawCrosshair(ctx);
@@ -222,7 +232,21 @@ export class SurfaceRenderer {
       ),
       v = cross(normal, u);
     const dpr = this.overlay.width / this.canvas.clientWidth;
-    ctx.strokeStyle = this.cursor.tool === "smooth" ? "#99e8b5" : "#f5df42";
+    ctx.strokeStyle =
+      this.cursor.tool === "scoop"
+        ? "#ff9876"
+        : this.cursor.tool === "smooth"
+          ? "#99e8b5"
+          : "#f5df42";
+    if (this.cursor.tool === "scoop") {
+      const center = this.project(point),
+        r = (radius * this.overlay.height) / (2 * this.scale);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.arc(...center, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([3 * dpr, 3 * dpr]);
+    }
     ctx.lineWidth = 1.7 * dpr;
     for (const factor of [1, 0.12]) {
       ctx.beginPath();
@@ -238,6 +262,17 @@ export class SurfaceRenderer {
       }
       ctx.stroke();
     }
+    ctx.setLineDash([]);
+    if (this.cursor.locked && this.crosshair) {
+      ctx.save();
+      ctx.globalAlpha = this.crosshairOpacity;
+      ctx.setLineDash([2 * dpr, 4 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(...this.project(this.crosshair));
+      ctx.lineTo(...this.project(point));
+      ctx.stroke();
+      ctx.restore();
+    }
     if (origin) {
       ctx.setLineDash([4 * dpr, 4 * dpr]);
       ctx.beginPath();
@@ -248,13 +283,14 @@ export class SurfaceRenderer {
     }
   }
   drawCrosshair(ctx) {
-    if (!this.crosshair) return;
+    if (!this.crosshair || this.crosshairOpacity === 0) return;
     const dpr = this.overlay.width / Math.max(1, this.canvas.clientWidth);
     const center = this.project(this.crosshair),
       span = this.scale * 0.09;
     // This marker intentionally remains visible through the surface: slice
     // crosshairs can lie inside the brain. Dashes distinguish it from the brush.
     ctx.save();
+    ctx.globalAlpha = this.crosshairOpacity;
     ctx.strokeStyle = "#65dcff";
     ctx.lineWidth = 1.4 * dpr;
     ctx.shadowColor = "#000";
@@ -266,8 +302,18 @@ export class SurfaceRenderer {
       a[axis] -= span;
       b[axis] += span;
       ctx.beginPath();
-      ctx.moveTo(...this.project(a));
-      ctx.lineTo(...this.project(b));
+      // Leave the central defect unobscured, even at full opacity.
+      const pa = this.project(a),
+        pb = this.project(b);
+      for (const p of [pa, pb]) {
+        const d = Math.hypot(p[0] - center[0], p[1] - center[1]);
+        if (d <= 5 * dpr) continue;
+        ctx.moveTo(...p);
+        ctx.lineTo(
+          center[0] + ((p[0] - center[0]) * 5 * dpr) / d,
+          center[1] + ((p[1] - center[1]) * 5 * dpr) / d,
+        );
+      }
       ctx.stroke();
     }
     ctx.setLineDash([]);
@@ -351,7 +397,59 @@ export class SurfaceRenderer {
   }
   patch(patch) {
     if (!patch) return;
+    this.revision = (this.revision || 0) + 1;
     const gl = this.gl;
+    gl.bindVertexArray(this.vao);
+    if (patch.vertexLength > this.positions.length) {
+      for (const [name, buffer] of [
+        ["positions", this.positionBuffer],
+        ["normals", this.normalBuffer],
+      ]) {
+        const grown = new Float32Array(patch.vertexLength);
+        grown.set(this[name]);
+        this[name] = grown;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, grown, gl.DYNAMIC_DRAW);
+      }
+      const grown = new Float32Array(patch.vertexLength);
+      grown.set(this.worldPositions);
+      this.worldPositions = grown;
+    }
+    if (patch.indexLength > this.indices.length) {
+      const grown = new Uint32Array(patch.indexLength);
+      grown.set(this.indices);
+      this.indices = grown;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, grown, gl.DYNAMIC_DRAW);
+      this.count = grown.length;
+    }
+    if (patch.triangleIds) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+      patch.triangleIds.forEach((t, j) =>
+        this.indices.set(patch.indices.subarray(j * 3, j * 3 + 3), t * 3),
+      );
+      for (let j = 0; j < patch.triangleIds.length; ) {
+        let end = j + 1;
+        while (
+          end < patch.triangleIds.length &&
+          patch.triangleIds[end] === patch.triangleIds[end - 1] + 1
+        )
+          end++;
+        gl.bufferSubData(
+          gl.ELEMENT_ARRAY_BUFFER,
+          patch.triangleIds[j] * 12,
+          patch.indices.subarray(j * 3, end * 3),
+        );
+        j = end;
+      }
+    }
+    if (patch.positions)
+      patch.ids.forEach((id, j) =>
+        this.worldPositions.set(
+          transform(this.affine, patch.positions.subarray(j * 3, j * 3 + 3)),
+          id * 3,
+        ),
+      );
     for (const [values, allValues, buffer] of [
       [patch.positions, this.positions, this.positionBuffer],
       [patch.normals, this.normals, this.normalBuffer],
@@ -378,19 +476,35 @@ export class SurfaceRenderer {
       }
     }
   }
+  nearest(point) {
+    return nearestSurface(
+      point,
+      this.worldPositions,
+      this.indices,
+      this.normals,
+    );
+  }
+  // Orthographic screen-plane movement keeps scoop depth fixed while dragging.
+  screenPoint(clientX, clientY, anchor) {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = vec3.transformMat4(vec3.create(), anchor, this.mvp);
+    return Array.from(
+      vec3.transformMat4(
+        vec3.create(),
+        [
+          ((clientX - rect.left) / rect.width) * 2 - 1,
+          1 - ((clientY - rect.top) / rect.height) * 2,
+          ndc[2],
+        ],
+        this.inverseMVP,
+      ),
+    );
+  }
   focus(point) {
-    let id = 0,
-      best = Infinity;
-    for (let i = 0; i < this.positions.length; i += 3) {
-      const p = transform(this.affine, this.positions.subarray(i, i + 3)),
-        d = dot(sub(p, point), sub(p, point));
-      if (d < best) {
-        best = d;
-        id = i;
-      }
-    }
-    const p = transform(this.affine, this.positions.subarray(id, id + 3)),
-      n = unit(Array.from(this.normals.subarray(id, id + 3)));
+    const hit = this.nearest(point);
+    if (!hit) return null;
+    const p = hit.point,
+      n = hit.normal;
     this.target = p;
     this.orientation = facing(n);
     this.cursor = {

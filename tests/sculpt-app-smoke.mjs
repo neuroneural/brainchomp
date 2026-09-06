@@ -20,9 +20,11 @@ try {
     { timeout: 60000 },
   );
   const initialCanvas = await page.locator("#gl1").boundingBox();
-  assert.ok(initialCanvas.width > 100 && initialCanvas.height > 100,
-    "MRI canvas must have a visible size before entering Sculpt");
-  await page.screenshot({path:"/tmp/brainchomp-initial-view.png"});
+  assert.ok(
+    initialCanvas.width > 100 && initialCanvas.height > 100,
+    "MRI canvas must have a visible size before entering Sculpt",
+  );
+  await page.screenshot({ path: "/tmp/brainchomp-initial-view.png" });
   console.log("APP LOADED", initialCanvas);
   await page.locator("#modelRunButton").click();
   await page.waitForFunction(
@@ -81,11 +83,37 @@ try {
       () => !document.querySelector('[data-action="done"]').disabled,
     );
   }
+  await page.locator('[data-mode="scoop"]').click();
+  await page.mouse.click(x, y);
+  await page.waitForFunction(
+    () => !document.querySelector('[data-action="done"]').disabled,
+  );
+  assert.match(
+    await page.locator(".sculpt-status").innerText(),
+    /Correction applied/,
+  );
+  console.log(
+    "SCOOP",
+    await page.locator("#sculpt-panel").getAttribute("data-worker-ms"),
+    "worker ms",
+    await page.locator("#sculpt-panel").getAttribute("data-preview-ms"),
+    "preview ms",
+  );
+  await page.locator('[data-action="undo"]').click();
+  await page.waitForFunction(
+    () => !document.querySelector('[data-action="done"]').disabled,
+  );
+  await page.locator('[data-action="redo"]').click();
+  await page.waitForFunction(
+    () => !document.querySelector('[data-action="done"]').disabled,
+  );
   assert.deepEqual(errors, []);
   await page.locator('[data-action="done"]').click();
   const restoredCanvas = await page.locator("#gl1").boundingBox();
-  assert.ok(restoredCanvas.width > 100 && restoredCanvas.height > 100,
-    "MRI canvas must retain a visible size after leaving Sculpt");
+  assert.ok(
+    restoredCanvas.width > 100 && restoredCanvas.height > 100,
+    "MRI canvas must retain a visible size after leaving Sculpt",
+  );
   async function download(title) {
     await page.locator("#saveBtn").click();
     const pending = page.waitForEvent("download");

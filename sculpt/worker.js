@@ -16,6 +16,7 @@ self.onmessage = ({ data: m }) => {
         maxDistance: session.begin(m.center, m.normal, m.radius, m.tool),
       };
     else if (m.type === "move") result = session.move(m.distance);
+    else if (m.type === "scoop") result = session.scoop(m.points);
     else if (m.type === "smooth") result = session.smooth(m.amount);
     else if (m.type === "commit") result = session.commit();
     else if (m.type === "cancel") result = session.cancel();

@@ -1,5 +1,5 @@
 import { mat4 } from "gl-matrix";
-import { MaskSliceAdapter } from "./slices.js";
+import { MaskSliceAdapter, SliceFootprint } from "./slices.js";
 import { SurfaceRenderer } from "./renderer.js";
 import { writeColumns } from "./geometry.js";
 import "./sculpt.css";
@@ -18,7 +18,7 @@ export function installSculptEditor({
   const panel = document.createElement("section");
   panel.id = "sculpt-panel";
   panel.hidden = true;
-  panel.innerHTML = `<div class="sculpt-bar"><strong>Sculpt mask</strong><div class="sculpt-modes" role="group" aria-label="Surface interaction"><button type="button" data-mode="grab" aria-pressed="true">Grab</button><button type="button" data-mode="smooth" aria-pressed="false">Smooth</button><button type="button" data-mode="rotate" aria-pressed="false">Rotate</button></div><button type="button" data-action="undo" title="Undo (Ctrl/⌘ Z)" disabled>Undo</button><button type="button" data-action="redo" title="Redo (Ctrl/⌘ Shift Z)" disabled>Redo</button><button type="button" data-action="done">Done</button></div><div class="sculpt-size"><label>Size <input aria-label="Brush radius" type="range" min="1" max="100" value="35"/><output></output></label><button type="button" data-action="focus" title="Bring the surface nearest the slice crosshair forward">Focus slice</button><button type="button" data-action="reset">Reset view</button></div><div class="sculpt-viewport"><canvas class="sculpt-surface" aria-label="Brain mask sculpting surface" tabindex="0"></canvas><canvas class="sculpt-cursor" aria-hidden="true"></canvas></div><p class="sculpt-help">Drag the ring along its normal. Facing you: drag up to pull, down to push. Two-finger scroll or right-drag rotates. Option/⌘ + scroll zooms. Cyan crosshair follows slice clicks.</p><p class="sculpt-status" role="status" aria-live="polite"></p>`;
+  panel.innerHTML = `<div class="sculpt-bar"><strong>Sculpt mask</strong><div class="sculpt-modes" role="group" aria-label="Surface interaction"><button type="button" data-mode="grab" aria-pressed="true">Grab</button><button type="button" data-mode="smooth" aria-pressed="false">Smooth</button><button type="button" data-mode="scoop" aria-pressed="false">Scoop</button><button type="button" data-mode="rotate" aria-pressed="false">Rotate</button></div><button type="button" data-action="undo" title="Undo (Ctrl/⌘ Z)" disabled>Undo</button><button type="button" data-action="redo" title="Redo (Ctrl/⌘ Shift Z)" disabled>Redo</button><button type="button" data-action="done">Done</button></div><div class="sculpt-size"><label>Size <input aria-label="Brush radius" type="range" min="1" max="100" value="35"/><output></output></label><button type="button" data-action="focus" title="Bring the surface nearest the slice crosshair forward">Focus slice</button><button type="button" data-action="reset">Reset view</button></div><div class="sculpt-target"><label><input type="checkbox" data-control="lock"/> Lock to slice crosshair</label><label>Crosshair <input type="range" aria-label="Crosshair opacity" min="0" max="100" value="45"/><output data-opacity>45%</output></label><span class="sculpt-anchor"></span></div><div class="sculpt-viewport"><canvas class="sculpt-surface" aria-label="Brain mask sculpting surface" tabindex="0"></canvas><canvas class="sculpt-cursor" aria-hidden="true"></canvas></div><p class="sculpt-help">Drag the ring along its normal. Facing you: drag up to pull, down to push. Two-finger scroll or right-drag rotates. Option/⌘ + scroll zooms. Cyan crosshair follows slice clicks.</p><p class="sculpt-status" role="status" aria-live="polite"></p>`;
   host.append(panel);
   const canvas = panel.querySelector(".sculpt-surface"),
     overlay = panel.querySelector(".sculpt-cursor");
@@ -26,6 +26,54 @@ export function installSculptEditor({
     output = panel.querySelector("output"),
     status = panel.querySelector(".sculpt-status");
   const help = panel.querySelector(".sculpt-help");
+  const lockBrush = panel.querySelector('[data-control="lock"]');
+  const opacity = panel.querySelector('[aria-label="Crosshair opacity"]');
+  const anchorLabel = panel.querySelector(".sculpt-anchor");
+  let footprint = null,
+    lockedHit = null,
+    anchorCache = null;
+  opacity.oninput = () => {
+    panel.querySelector("[data-opacity]").textContent = `${opacity.value}%`;
+    if (renderer) {
+      renderer.crosshairOpacity = Number(opacity.value) / 100;
+      renderer.drawCursor();
+    }
+  };
+  const refreshLock = () => {
+    if (!renderer || !active || busy) return;
+    lockedHit = null;
+    if (lockBrush.checked && mode !== "rotate") {
+      const point = renderer.crosshair;
+      const key = point.join(",") + ":" + (renderer.revision || 0);
+      if (anchorCache?.renderer !== renderer || anchorCache.key !== key)
+        anchorCache = { renderer, key, hit: renderer.nearest(point) };
+      const nearest = anchorCache.hit;
+      lockedHit =
+        mode === "scoop"
+          ? {
+              point: point.slice(),
+              normal: nearest?.normal || renderer.direction,
+            }
+          : nearest;
+      anchorLabel.textContent =
+        mode === "scoop"
+          ? "Scoop center is the exact slice point."
+          : nearest
+            ? `Surface anchor ${Number(
+                nearest.distance.toPrecision(2),
+              )} mm from slice point.`
+            : "No surface remains; undo to restore it.";
+      renderer.cursor = lockedHit
+        ? { ...lockedHit, radius, tool: mode, locked: true }
+        : null;
+    } else {
+      anchorLabel.textContent = "";
+      renderer.cursor = null;
+    }
+    panel.dataset.anchor = lockedHit?.point.join(",") || "";
+    renderer.drawCursor();
+  };
+  lockBrush.onchange = refreshLock;
   const actions = Object.fromEntries(
     [...panel.querySelectorAll("[data-action]")].map((b) => [
       b.dataset.action,
@@ -67,6 +115,7 @@ export function installSculptEditor({
     actions.focus.disabled = busy;
     actions.reset.disabled = busy;
     slider.disabled = busy;
+    lockBrush.disabled = busy;
     panel.querySelectorAll("[data-mode]").forEach((b) => (b.disabled = busy));
     // A save during a stroke could otherwise race the latest voxel preview.
     for (const id of ["saveBtn", "saveStatsBtn"]) {
@@ -114,8 +163,12 @@ export function installSculptEditor({
   }
   const syncCrosshair = () => {
     if (!active || !renderer) return;
-    renderer.crosshair = Array.from(nv.frac2mm(nv.scene.crosshairPos));
+    renderer.crosshair = Array.from(nv.frac2mm(nv.scene.crosshairPos)).slice(
+      0,
+      3,
+    );
     panel.dataset.crosshair = renderer.crosshair.join(",");
+    refreshLock();
     renderer.drawCursor();
   };
   const onLocationChange = nv.onLocationChange;
@@ -169,6 +222,7 @@ export function installSculptEditor({
       await prepare();
       if (generation !== sessionGeneration) return;
       slices = new MaskSliceAdapter(nv);
+      footprint = new SliceFootprint(nv);
       if (!worker) {
         status.textContent = "Building the editable surface…";
         const source = getState(),
@@ -216,6 +270,8 @@ export function installSculptEditor({
         });
         if (generation !== sessionGeneration) return;
         renderer = new SurfaceRenderer(canvas, overlay, result, affine);
+        renderer.crosshairOpacity = Number(opacity.value) / 100;
+        renderer.onCursorChange = (cursor) => footprint?.set(cursor);
         syncCrosshair();
         panel.dataset.triangles = String(result.indices.length / 3);
         panel.dataset.buildMs = String(Math.round(ms));
@@ -233,13 +289,18 @@ export function installSculptEditor({
         onError(error);
       }
     } finally {
-      if (generation === sessionGeneration) setBusy(false);
+      if (generation === sessionGeneration) {
+        setBusy(false);
+        refreshLock();
+      }
     }
   }
   function close() {
     if (!active || busy) return;
     active = false;
     gesture = null;
+    footprint?.close();
+    footprint = null;
     slices?.close();
     slices = null;
     cancelAnimationFrame(frame);
@@ -279,13 +340,16 @@ export function installSculptEditor({
             ? "Smooth: click to soften the patch; drag upward for more. "
             : mode === "grab"
               ? "Grab: drag along the normal; facing you, up pulls and down pushes. "
-              : "Drag to freely rotate. ") +
+              : mode === "scoop"
+                ? "Scoop: click to erase a sphere; drag to sweep at fixed depth. Lock to slices for an exact center. "
+                : "Drag to freely rotate. ") +
           "Two-finger scroll or right-drag rotates; Option/⌘ + scroll zooms. Cyan crosshair follows slice clicks.";
         panel
           .querySelectorAll("[data-mode]")
           .forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
         canvas.style.cursor = mode === "rotate" ? "grab" : "crosshair";
         renderer.cursor = null;
+        refreshLock();
         renderer.drawCursor();
       }),
   );
@@ -303,7 +367,10 @@ export function installSculptEditor({
     } catch (error) {
       if (generation === sessionGeneration) report(error);
     } finally {
-      if (generation === sessionGeneration) setBusy(false);
+      if (generation === sessionGeneration) {
+        setBusy(false);
+        refreshLock();
+      }
     }
   }
   actions.undo.onclick = () => historyAction("undo");
@@ -313,13 +380,18 @@ export function installSculptEditor({
     const picked = renderer.focus(
       Array.from(nv.frac2mm(nv.scene.crosshairPos)),
     );
+    if (!picked) return;
     renderer.cursor.radius = radius;
+    if (lockBrush.checked) refreshLock();
     renderer.drawCursor();
     status.textContent = "Nearest surface to the slice crosshair highlighted.";
     return picked;
   };
   actions.focus.onclick = focus;
-  actions.reset.onclick = () => renderer?.resetView();
+  actions.reset.onclick = () => {
+    renderer?.resetView();
+    refreshLock();
+  };
   nv.gl.canvas.addEventListener("dblclick", () => {
     if (active) requestAnimationFrame(focus);
   });
@@ -384,17 +456,25 @@ export function installSculptEditor({
         );
         renderer.draw();
       } else renderer.orbit(dx, dy);
+      if (lockBrush.checked) refreshLock();
     },
     { passive: false },
   );
   const hover = (e) => {
     if (!renderer || busy) return;
+    if (lockBrush.checked && mode !== "rotate") {
+      renderer.cursor = lockedHit
+        ? { ...lockedHit, radius, tool: mode, locked: true }
+        : null;
+      renderer.drawCursor();
+      return;
+    }
     const hit = mode !== "rotate" ? renderer.pick(e.clientX, e.clientY) : null;
     renderer.cursor = hit ? { ...hit, radius, tool: mode } : null;
     renderer.drawCursor();
   };
   canvas.addEventListener("pointerleave", () => {
-    if (!gesture && renderer) {
+    if (!gesture && renderer && !lockBrush.checked) {
       renderer.cursor = null;
       renderer.drawCursor();
     }
@@ -410,7 +490,9 @@ export function installSculptEditor({
       renderer.drawCursor();
       return;
     }
-    const hit = renderer.pick(e.clientX, e.clientY);
+    const hit = lockBrush.checked
+      ? lockedHit
+      : renderer.pick(e.clientX, e.clientY);
     if (!hit) return;
     const a = renderer.project(hit.point),
       b = renderer.project(hit.point.map((v, i) => v + hit.normal[i]));
@@ -432,6 +514,9 @@ export function installSculptEditor({
       worldPerPixel,
       wanted: mode === "smooth" ? 0.35 : 0,
       shown: 0,
+      points: mode === "scoop" ? [hit.point.slice()] : [],
+      screenStart: renderer.screenPoint(e.clientX, e.clientY, hit.point),
+      sliceOrigin: renderer.crosshair.slice(),
       starting: true,
       running: false,
       ended: false,
@@ -441,13 +526,15 @@ export function installSculptEditor({
     gesture = g;
     setBusy(true);
     renderer.cursor = { ...hit, radius, tool: g.tool, origin: hit.point };
-    recenter(hit.point);
+    if (!lockBrush.checked) recenter(hit.point);
     nv.drawScene();
     renderer.drawCursor();
     status.textContent =
       g.tool === "smooth"
         ? "Softening this patch · drag upward for more; Escape cancels."
-        : "Drag to move the boundary · Escape cancels this grab.";
+        : g.tool === "scoop"
+          ? "Scoop removes the orange sphere · drag to sweep; Escape cancels."
+          : "Drag to move the boundary · Escape cancels this grab.";
     try {
       const { result, ms } = await rpc("begin", {
         center: hit.point,
@@ -464,6 +551,7 @@ export function installSculptEditor({
         report(error);
         gesture = null;
         setBusy(false);
+        refreshLock();
       }
     }
   });
@@ -471,7 +559,34 @@ export function installSculptEditor({
     if (g.starting || g.running || g.generation !== sessionGeneration) return;
     g.running = true;
     try {
-      while (!g.cancelled && g.wanted !== g.shown) {
+      while (
+        !g.cancelled &&
+        (g.tool === "scoop" ? g.points.length : g.wanted !== g.shown)
+      ) {
+        if (g.tool === "scoop") {
+          const points = g.points.splice(0, 64),
+            start = performance.now();
+          const { result, ms } = await rpc("scoop", { points });
+          if (g.generation !== sessionGeneration) return;
+          apply(result);
+          const point = points[points.length - 1];
+          recenter(point);
+          renderer.cursor = {
+            point,
+            normal: g.hit.normal,
+            radius,
+            tool: "scoop",
+            locked: lockBrush.checked,
+          };
+          renderer.draw();
+          panel.dataset.previewMs = String(
+            Math.round(performance.now() - start),
+          );
+          panel.dataset.workerMs = String(Math.round(ms));
+          status.textContent =
+            "Scooping · release to keep; Escape restores the whole stroke.";
+          continue;
+        }
         const distance = Math.max(
           g.tool === "smooth" ? 0 : -g.max,
           Math.min(g.max, g.wanted),
@@ -518,7 +633,7 @@ export function installSculptEditor({
         if (g.generation !== sessionGeneration) return;
         if (g.cancelled) {
           apply(result);
-          recenter(g.hit.point);
+          recenter(g.sliceOrigin);
           nv.drawScene();
           renderer.cursor = { ...g.hit, radius, tool: g.tool };
           status.textContent = "Correction cancelled.";
@@ -529,6 +644,7 @@ export function installSculptEditor({
         renderer.draw();
         gesture = null;
         setBusy(false);
+        refreshLock();
       }
     } catch (error) {
       if (g.generation === sessionGeneration) {
@@ -536,7 +652,7 @@ export function installSculptEditor({
         try {
           const { result } = await rpc("cancel");
           apply(result);
-          recenter(g.hit.point);
+          recenter(g.sliceOrigin);
           nv.drawScene();
           renderer.draw();
         } catch (rollbackError) {
@@ -545,6 +661,7 @@ export function installSculptEditor({
         }
         gesture = null;
         setBusy(false);
+        refreshLock();
         report(error);
       }
     } finally {
@@ -556,9 +673,32 @@ export function installSculptEditor({
     if (g?.id === e.pointerId) {
       if (g.kind === "rotate") {
         renderer.dragOrbit([g.x, g.y], [e.clientX, e.clientY]);
+        if (lockBrush.checked) refreshLock();
         g.x = e.clientX;
         g.y = e.clientY;
       } else if (!g.ended) {
+        if (g.tool === "scoop") {
+          const screen = renderer.screenPoint(
+            e.clientX,
+            e.clientY,
+            g.hit.point,
+          );
+          const point = g.hit.point.map(
+            (v, k) => v + screen[k] - g.screenStart[k],
+          );
+          g.points.push(point);
+          // Cursor responds immediately; accepted surface and mask revisions
+          // still publish together when the worker finishes the local cut.
+          renderer.cursor = {
+            point,
+            normal: g.hit.normal,
+            radius,
+            tool: "scoop",
+          };
+          renderer.drawCursor();
+          void pump(g);
+          return;
+        }
         g.wanted =
           g.tool === "smooth"
             ? 0.35 + (g.y - e.clientY) / 120

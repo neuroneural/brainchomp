@@ -316,3 +316,188 @@ test("off-center trackball drags include roll and remain reversible", () => {
   assert.ok(Math.abs(local[2]) > 0.01, "edge drag should produce roll");
   assert.ok(Math.abs(quat.dot(initial, restored)) > 0.99999);
 });
+
+function filledSession(s) {
+  return s.voxelizer.fill([0, 0, s.dims[0] - 1, s.dims[1] - 1]);
+}
+function activeMesh(s) {
+  return Array.from(s.indices)
+    .filter((_, i) => s.triangleCells[Math.floor(i / 3)] >= 0)
+    .map((id) => Array.from(s.positions.subarray(id * 3, id * 3 + 3)))
+    .flat();
+}
+test("scoop removes a swept sphere, welds closed boundaries, and restores mixed history", () => {
+  const s = new SculptSession(sphere(), [32, 32, 32], identity, identity);
+  s.begin([25.5, 16, 16], [1, 0, 0], 5);
+  s.move(0.6);
+  s.commit();
+  const before = s.mask.slice(),
+    mesh = activeMesh(s);
+  s.begin([25, 16, 16], [1, 0, 0], 3, "scoop");
+  s.scoop([
+    [25, 16, 16],
+    [25, 20, 16],
+  ]);
+  assert.ok(
+    s.mask.reduce((a, b) => a + b, 0) < before.reduce((a, b) => a + b, 0),
+  );
+  assert.deepEqual(filledSession(s), s.mask);
+  s.commit();
+  const after = s.mask.slice(),
+    afterMesh = activeMesh(s);
+  s.undo();
+  assert.deepEqual(s.mask, before);
+  assert.deepEqual(activeMesh(s), mesh);
+  s.redo();
+  assert.deepEqual(s.mask, after);
+  assert.deepEqual(activeMesh(s), afterMesh);
+  s.begin([16, 16, 25.5], [0, 0, 1], 4);
+  s.move(0.4);
+  s.commit();
+  assert.deepEqual(filledSession(s), s.mask);
+  s.undo();
+  s.undo();
+  assert.deepEqual(s.mask, before);
+  assert.deepEqual(activeMesh(s), mesh);
+});
+test("scoop path samples, cancellation, empty cuts and complete removal are exact", () => {
+  const a = new SculptSession(sphere(), [32, 32, 32], identity, identity);
+  const b = new SculptSession(sphere(), [32, 32, 32], identity, identity);
+  for (const s of [a, b]) s.begin([25, 12, 16], [1, 0, 0], 3, "scoop");
+  a.scoop([[25, 22, 16]]);
+  for (let y = 12; y <= 22; y++) b.scoop([[25, y, 16]]);
+  assert.deepEqual(a.mask, b.mask);
+  assert.deepEqual(filledSession(b), b.mask);
+  a.cancel();
+  b.cancel();
+  assert.deepEqual(a.mask, sphere());
+  assert.deepEqual(filledSession(b), sphere());
+  a.begin([100, 100, 100], [1, 0, 0], 1, "scoop");
+  assert.equal(a.scoop([[100, 100, 100]]), null);
+  a.commit();
+  assert.equal(a.history().undo, 0);
+  a.begin([16, 16, 16], [1, 0, 0], 30, "scoop");
+  a.scoop([[16, 16, 16]]);
+  a.commit();
+  assert.equal(a.mask.some(Boolean), false);
+  assert.deepEqual(filledSession(a), a.mask);
+  a.undo();
+  assert.deepEqual(a.mask, sphere());
+  assert.deepEqual(filledSession(a), a.mask);
+});
+test("scoop uses millimeters under reflected oblique anisotropic affines", () => {
+  const affine = mat4.fromValues(
+    -2,
+    0.2,
+    0,
+    0,
+    0.3,
+    1.1,
+    0,
+    0,
+    0,
+    0.1,
+    3,
+    0,
+    10,
+    -4,
+    8,
+    1,
+  );
+  const inverse = mat4.invert(mat4.create(), affine),
+    mask = sphere();
+  const s = new SculptSession(mask.slice(), [32, 32, 32], affine, inverse);
+  const center = transform(affine, [24, 16, 16]),
+    radius = 5;
+  s.begin(center, [1, 0, 0], radius, "scoop");
+  s.scoop([center]);
+  for (let z = 0; z < 32; z++)
+    for (let y = 0; y < 32; y++)
+      for (let x = 0; x < 32; x++) {
+        const i = x + 32 * (y + 32 * z),
+          p = transform(affine, [x, y, z]);
+        const outside = Math.hypot(...p.map((v, k) => v - center[k])) > radius;
+        assert.equal(s.mask[i], Number(mask[i] && outside));
+      }
+  assert.deepEqual(filledSession(s), s.mask);
+});
+
+import { closestTriangle, nearestSurface } from "../sculpt/targeting.js";
+test("locked target uses the closest triangle point, including interior and edges", () => {
+  assert.deepEqual(
+    closestTriangle([2, 2, 5], [0, 0, 0], [10, 0, 0], [0, 10, 0]).point,
+    [2, 2, 0],
+  );
+  assert.deepEqual(
+    closestTriangle([6, 6, 0], [0, 0, 0], [10, 0, 0], [0, 10, 0]).point,
+    [5, 5, 0],
+  );
+  const positions = new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 20]);
+  const ns = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  const hit = nearestSurface(
+    [2, 2, 1],
+    positions,
+    new Uint32Array([0, 0, 0, 0, 1, 2]),
+    ns,
+  );
+  assert.deepEqual(hit.point, [2, 2, 0]);
+  assert.equal(hit.distance, 1);
+  assert.equal(
+    nearestSurface([0, 0, 0], positions, new Uint32Array([0, 0, 0]), ns),
+    null,
+  );
+});
+test("cutting an image-edge bridge changes topology with exact cancellation and branching", () => {
+  const dims = [16, 16, 16],
+    m = new Uint8Array(4096);
+  for (let z = 0; z < 16; z++)
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++)
+        m[x + 16 * (y + 16 * z)] = Number(
+          ((x < 5 || x > 10) && y < 10 && z < 10) || (y === 5 && z === 5),
+        );
+  const s = new SculptSession(m.slice(), dims, identity, identity),
+    original = activeMesh(s);
+  s.begin([8, 5, 5], [1, 0, 0], 2, "scoop");
+  s.scoop([[8, 5, 5]]);
+  s.commit();
+  assert.equal(s.mask[8 + 16 * (5 + 16 * 5)], 0);
+  assert.deepEqual(filledSession(s), s.mask);
+  s.undo();
+  assert.deepEqual(activeMesh(s), original);
+  s.begin([0, 0, 0], [1, 0, 0], 3, "scoop");
+  s.scoop([[0, 0, 0]]);
+  s.commit();
+  assert.equal(s.history().redo, 0);
+  assert.deepEqual(filledSession(s), s.mask);
+  s.begin([11, 4, 4], [1, 0, 0], 2, "smooth");
+  s.smooth(0.2);
+  s.cancel();
+  s.undo();
+  assert.deepEqual(s.mask, m);
+  assert.deepEqual(activeMesh(s), original);
+});
+
+test("an interior locked scoop grows mesh buffers and restores an enclosed cavity exactly", () => {
+  const s = new SculptSession(sphere(), [32, 32, 32], identity, identity);
+  const mesh = activeMesh(s),
+    capacity = s.indices.length;
+  s.begin([16, 16, 16], [1, 0, 0], 3, "scoop");
+  const patch = s.scoop([[16, 16, 16]]);
+  assert.ok(patch.indexLength > capacity);
+  assert.equal(s.mask[16 + 32 * (16 + 32 * 16)], 0);
+  assert.deepEqual(filledSession(s), s.mask);
+  s.commit();
+  s.undo();
+  assert.deepEqual(s.mask, sphere());
+  assert.deepEqual(activeMesh(s), mesh);
+  s.redo();
+  assert.deepEqual(filledSession(s), s.mask);
+  s.begin([16, 16, 16], [1, 0, 0], 3, "scoop");
+  s.scoop([[26, 16, 16]]);
+  s.commit();
+  assert.deepEqual(filledSession(s), s.mask);
+  s.undo();
+  s.undo();
+  assert.deepEqual(activeMesh(s), mesh);
+});

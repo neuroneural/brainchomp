@@ -18,10 +18,26 @@ Repeated small strokes can soften a longer protrusion. It does not cut off blobs
 
 The cyan 3D crosshair tracks ordinary slice clicks. It remains visible through
 the surface when the selected point is inside the brain, and does not change the
-camera angle. During a grab, slices follow the displaced surface anchor and show
+camera angle. **Crosshair** controls its opacity from hidden to full brightness;
+the marker leaves a clear hole at the center. **Lock to slice crosshair** pins
+Grab/Smooth to the nearest point on a surface triangle, with an explicit distance
+label and a connector to the slice point. Hovering elsewhere does not retarget a
+locked brush. Rotation also preserves the anchor. During a grab, slices follow the displaced surface anchor and show
 the current binary mask. Double-click a slice, or choose **Focus slice**, to bring
 its nearest surface point forward. **Escape** cancels a grab. Undo/redo is available through
 buttons, Ctrl/Command-Z, Ctrl/Command-Shift-Z, or Ctrl/Command-Y.
+
+**Scoop** removes a sphere of mask voxels at the orange cursor. The circle in
+each slice is the sphere's intersection with that slice, in physical millimeters.
+Click for one scoop; drag to sweep a continuous sphere at the initial camera depth.
+It does not follow a changing surface underneath, so the tool will not chase a
+hole deeper as voxels disappear. Rotate between strokes to choose another plane.
+With **Lock to slice crosshair**, Scoop starts at the exact slice point, including
+points inside/outside the surface; this differs from Grab/Smooth's surface anchor.
+The cursor responds immediately; accepted mesh and mask revisions publish together.
+Escape restores the entire stroke. Undo/redo includes both geometry and mask, and
+Grab/Smooth remain available after a cut. Scoop can sever thin connections; there
+is no automatic removal of the resulting disconnected components.
 
 **Done** retains corrections and session history. Reopening Sculpt reuses the
 mesh. Loading another image, running inference again, or applying a 2D drawing
@@ -31,11 +47,23 @@ reload does not retain sculpt history; save the corrected NIfTI before leaving.
 
 ## Implementation
 
-- `sculpt/geometry.js`: one-time, welded marching-tetrahedra extraction at 0.5,
-  local normal deformation, an XY triangle index, column-wise filled-surface
-  voxelization, and mesh/mask undo patches. The Smooth tool uses weighted local
+- `sculpt/surface.js`: welded marching-tetrahedra extraction at 0.5 (whole volume
+  initially, selected lattice cells for cuts), physical geometry helpers, an XY
+  triangle index, and column-wise filled-surface voxelization.
+- `sculpt/geometry.js`: editing sessions, local normal deformation, and mesh/mask
+  undo patches. The Smooth tool uses weighted local
   Jacobi relaxation with pinned vertices outside the brush and bounded physical
   displacement. Padding closes image-edge surfaces.
+- `sculpt/topology.js`: sparse extraction of changed lattice cells, with stable
+  vertex/triangle slots and welded boundary vertices. Scoop subtracts a swept
+  world-space sphere from voxel centers. Free mesh slots are reused; buffers grow
+  only when needed. Undo stores changed slots and removed voxel IDs, not whole
+  mesh snapshots. Cells affected by Grab/Smooth since the last extraction are
+  also re-extracted when cutting, retaining their exact voxel masks while
+  resampling their subvoxel geometry to the binary boundary. Untouched cells
+  retain their geometry. Triangle indexes update locally; adjacency rebuilds lazily.
+- `sculpt/targeting.js`: closest-point triangle projection and interpolated normals
+  for explicit slice-to-surface targeting; inactive triangle slots are ignored.
 - `sculpt/worker.js`: owns the editable mesh and history. CPU geometry work stays
   off the UI thread. Only affected projected columns are voxelized; complete
   columns are necessary because a local surface patch is not closed.
@@ -61,10 +89,12 @@ Previews publish matching mesh and mask revisions together; stale responses
 from invalidated sessions are ignored. History targets 32 MiB and retains at
 least the most recent operation, even if it individually exceeds that target.
 
-This version has fixed topology: no cutting, remeshing, blob deletion, or model
-updates. Displacement is limited to a quarter of the brush radius per grab.
+Grab/Smooth preserve topology; Scoop changes it with local remeshing. There is
+no component deletion tool, fill brush, or model update/backpropagation feature.
+The spherical cut is voxel-resolution, so a small cut may have visible sampling
+steps; Smooth can soften the result. Undo is the exact recovery from overscooping. Displacement is limited to a quarter of the brush radius per grab.
 Image-boundary exits and locally folded triangles reject and cancel the stroke.
-These checks are not a general self-intersection solver; extreme cumulative
+These Grab/Smooth checks are not a general self-intersection solver; extreme cumulative
 sculpting is outside this first version's intended small-correction workflow.
 The surface interpolates between voxel centers; slice masks and saved labels
 remain discrete. Display smoothing does not silently change the mask.
@@ -87,12 +117,15 @@ islands and edge-touching masks; closed triangle winding; physical-space grabs
 under reflected/oblique/anisotropic affines; event-rate independence; exact
 cancel/undo/redo; history branching; image-edge rejection; all 48 storage
 orientations; spike smoothing with exact rollback; and rotation through the
-poles, a full revolution, and off-center roll. The browser fixture uses real NiiVue, WebGL2 and the worker, and
-checks drawing export against the canonical mask, camera/slice behavior,
+poles, a full revolution, and off-center roll. Scoop tests cover closed local
+replacement after deformations, swept-path sampling, reflected/oblique affines,
+image-edge cuts, severing a bridge, complete removal, history branching, mixed
+Grab/Smooth/Scoop history, and triangle-interior targeting. The browser fixture uses real NiiVue, WebGL2 and the worker, and
+checks drawing export against the canonical mask after Grab and Scoop, camera/slice behavior,
 undo/redo, cancellation, narrow layout, and retained history.
 
 The full app smoke test runs the bundled rodent model, sculpts its actual 256³
-output, checks undo/redo and downloads both NIfTI outputs. It verifies the
+output with Grab and Scoop, checks undo/redo and downloads both NIfTI outputs. It verifies the
 exported brain equals the input times the corrected mask at every voxel.
 
 Developer timing values are recorded in `#sculpt-panel` data attributes, not in
