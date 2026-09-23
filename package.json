@@ -3,6 +3,9 @@
   "private": true,
   "version": "5.0.0",
   "type": "module",
+  "bin": {
+    "brainchomp": "./cli.mjs"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,12 +14,15 @@
     "pretest": "vite build",
     "test:sculpt": "node --test tests/sculpt-unit.mjs",
     "test:sculpt:browser": "node tests/sculpt-browser.mjs",
-    "test:sculpt:app": "node tests/sculpt-app-smoke.mjs"
+    "test:sculpt:app": "node tests/sculpt-app-smoke.mjs",
+    "test:cli": "node --test tests/cli-unit.mjs"
   },
   "dependencies": {
     "@niivue/niivue": "^0.62.0",
-    "@tensorflow/tfjs": "^4.20.0",
-    "gl-matrix": "^3.4.3"
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-node": "^4.22.0",
+    "gl-matrix": "^3.4.3",
+    "nifti-reader-js": "^0.8.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

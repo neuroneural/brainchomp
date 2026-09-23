@@ -48,6 +48,27 @@ The WebGPU export uses the low-memory Brainchop pipeline: fp16 activation
 storage, fp32-safe GroupNorm conditioning, and fused two-class argmax. The
 largest individual activation buffer is 512 MiB.
 
+## Command-line use
+
+`cli.mjs` runs the same model on NIfTI files in Node.js on the CPU. It uses
+tfjs-node and the same normalization and largest-component postprocessing as
+the app.
+
+```sh
+npm ci
+node cli.mjs input.nii.gz -o out/sub-01
+```
+
+It writes three files. Each file has the header and affine of the input.
+
+- `<prefix>_mask.nii.gz` — uint8 brain mask (largest connected component)
+- `<prefix>_brain.nii.gz` — input multiplied by the mask, in the input datatype
+- `<prefix>_prob.nii.gz` — float32 brain probability (softmax, no component filter)
+
+If you do not give `-o`, the prefix is the input path without `.nii`/`.nii.gz`.
+The input contract above also applies here: the input must be `256³`, NIfTI-1
+and little-endian. One volume takes about 35 s and about 9.5 GB of RAM.
+
 ## Development
 
 ```sh
