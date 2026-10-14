@@ -2,6 +2,8 @@ import { installSculptEditor } from "./sculpt/editor.js";
 import { Niivue } from "@niivue/niivue";
 import { runInference as runInferenceTfjsMain } from "./brainchop-mainthread.js";
 import { runInferenceWebGpu } from "./inference-webgpu.js";
+import { isConformed, conformRodent, voxelMap } from "./rodent-conform.js";
+import { openBrainMask } from "./mask-cleanup.js";
 import { inferenceModelsList, brainChopOpts } from "./brainchop-parameters.js";
 import { localSystemDetails } from "./brainchop-diagnostics.js";
 import MyWorker from "./brainchop-webworker.js?worker";
@@ -235,7 +237,7 @@ async function main() {
   let isolationStats = null;   // { lines:[...], color:[r,g,b,a] } drawn as a fixed HUD
   const HUD_TEXT_SCALE = 0.9;  // relative to niivue fontPx
   let nativeInputNV = null;    // volume as loaded (native grid), before conform
-  let nativeInputName = "input.nii.gz";
+  let replacingInput = false;  // ensureConformed() is swapping in the conformed volume
   const sampleSelect = document.getElementById("sampleSelect");
   const maskToggle = document.getElementById("maskToggle");
   const modelRunButton = document.getElementById("modelRunButton");
@@ -370,7 +372,7 @@ async function main() {
         Brainchomp runs entirely <strong>locally in your browser</strong>. Your imaging data never leaves your device.</p>
 
         <p><strong>⌨️ Controls</strong><br>
-        • <strong>Drag & Drop</strong> a pre-conformed 256³ NIfTI file to open.<br>
+        • <strong>Drag & Drop</strong> a rodent NIfTI file to open.<br>
         • Use the <strong>example selector</strong> to switch between the bundled rodent MRI and mask.<br>
         • Press <strong>C</strong> to cycle the clip-plane.<br>
         • Press <strong>V</strong> to cycle through views.</p>
@@ -380,7 +382,7 @@ async function main() {
         toggle to switch the overlay between the extracted brain and its
         post-processed binary mask. The Save menu offers both outputs.</p>
         
-        <p><em>Inputs must already be 256 × 256 × 256. This version does not resample or conform them.</em></p>
+        <p><em>Inputs of any size or orientation are resampled to 256³ at 0.1 mm (LPS) before inference; saved masks and brains are written back on the original grid.</em></p>
       </div>
     `;
     showModal("About Brainchomp", aboutContent);
@@ -441,16 +443,22 @@ async function main() {
     nv1.setOpacity(1, opacitySlider1.value / 255);
   };
 
+  // Resample the loaded volume onto the model's grid (256³, 0.1 mm, LPS) unless
+  // it is already there. The native volume stays in nativeInputNV so results
+  // can be exported back onto the original grid.
   async function ensureConformed() {
     const nii = nv1.volumes[0];
-    const expected = 256 * 256 * 256;
-    const valid =
-      nii.dims[1] === 256 && nii.dims[2] === 256 && nii.dims[3] === 256
-      && nii.img.length === expected;
-    if (valid) return;
-    throw new Error(
-      `Brainchomp currently requires a pre-conformed 256 × 256 × 256 NIfTI; received ${nii.dims[1]} × ${nii.dims[2]} × ${nii.dims[3]}.`
-    );
+    if (isConformed(nii)) return;
+    callbackUI("Conforming input to 256³ at 0.1 mm…", 0);
+    await new Promise((r) => setTimeout(r, 30)); // let the status paint before the blocking loop
+    const conformed = await conformRodent(nv1, nii);
+    replacingInput = true;
+    try {
+      await nv1.removeVolume(nii);
+      nv1.addVolume(conformed);
+    } finally {
+      replacingInput = false;
+    }
   }
 
   async function closeAllOverlays() {
@@ -826,6 +834,33 @@ async function main() {
       window.alert("No result to save (run Skull-strip first).");
       return;
     }
+    // Results live on the conformed grid; if the input had to be conformed,
+    // export them on the grid the user loaded instead.
+    if (nativeInputNV && nativeInputNV !== nv1.volumes[0]) {
+      callbackUI("Reslicing to native space…", 0);
+      await new Promise((r) => setTimeout(r, 30)); // let the status paint before the blocking loop
+      const mask = resliceMaskToNative(lastBrainMask);
+      const outputVolume = nativeInputNV.clone();
+      if (kind === "mask") {
+        const d = nativeInputNV.hdr.dims;
+        outputVolume.hdr.dims = [3, d[1], d[2], d[3], 1, 1, 1, 1];
+        Object.assign(outputVolume.hdr, { scl_inter: 0, scl_slope: 1, cal_min: 0, cal_max: 1 });
+        outputVolume.img = mask;
+        outputVolume.hdr.datatypeCode = 2; // DT_UINT8
+        outputVolume.hdr.numBitsPerVoxel = 8;
+        outputVolume.hdr.intent_code = 1002; // NIFTI_INTENT_LABEL
+        await outputVolume.saveToDisk("brainmask.nii.gz");
+      } else {
+        // Original intensities (and datatype/scaling) with non-brain voxels zeroed.
+        const img = outputVolume.img;
+        const nvox = mask.length;
+        for (let i = 0; i < img.length; i++) if (!mask[i % nvox]) img[i] = 0;
+        outputVolume.hdr.intent_code = 0;
+        await outputVolume.saveToDisk("skull_stripped_brain.nii.gz");
+      }
+      callbackUI("Saved native-space result.", 1);
+      return;
+    }
     const outputVolume = await nv1.volumes[0].clone();
     outputVolume.zeroImage();
     Object.assign(outputVolume.hdr, { scl_inter: 0, scl_slope: 1 });
@@ -852,150 +887,50 @@ async function main() {
     await withPristineLabels(async () => { await nv1.saveDocument("brainchomp.nvd"); });
   }
 
-  // Native-space segmentation: reslice the conformed (256³, 1 mm) labels back
-  // onto the original input grid. See resliceLabelsToNative() for the method.
-  async function saveSegmentationNative() {
-    if (nv1.volumes.length < 2) { window.alert("No segmentation to save (run a model first)."); return; }
-    if (!nativeInputNV || !nativeInputNV.hdr || !nativeInputNV.hdr.affine) {
-      window.alert("Original input grid is unavailable — reload the image and try again.");
-      return;
-    }
-    callbackUI("Reslicing to native space…", 0);
-    await new Promise((r) => setTimeout(r, 30)); // let the status paint before the blocking loop
-    try {
-      const outNV = withPristineLabels(() => resliceLabelsToNative());
-      await outNV.saveToDisk("segmentation_native.nii.gz");
-      callbackUI("Saved native-space segmentation.", 1);
-    } catch (e) {
-      console.error("Native-space reslice failed:", e);
-      window.alert("Native-space export failed: " + (e && e.message ? e.message : e));
-    }
-  }
-
-  // Reslice the conformed overlay onto the native input grid.
-  //
-  // For a label map (segmentation): nearest-neighbour with 2× supersampling and
-  // a majority vote per output voxel — crisper categorical boundaries — written
-  // as Int16 tagged NIFTI_INTENT_LABEL.
-  // For an intensity output (e.g. skull-stripped brain): plain nearest-neighbour
-  // keeping the native datatype and NOT tagged as a label — it's an image.
-  //
-  // The native→conformed voxel map is built by probing niivue's own verified
-  // transforms at four basis points (origin + unit steps), so it is correct for
-  // any orientation without us re-deriving affine conventions. Validated: when
-  // the two grids are identical the map is the identity.
-  function resliceLabelsToNative() {
-    const seg = nv1.volumes[1];
-    const labels = seg.img;                    // pristine labels (see withPristineLabels)
-    const A = nativeInputNV.hdr.affine;        // native storage-voxel -> mm (row-major 4x4)
+  // Reslice a binary mask on the conformed grid onto the native input grid:
+  // nearest-neighbour with 2× supersampling and a majority vote per output
+  // voxel (ties keep the mask), for crisp boundaries when native voxels are
+  // larger than 0.1 mm.
+  function resliceMaskToNative(mask) {
+    const conf = nv1.volumes[0];
     const nx = nativeInputNV.hdr.dims[1], ny = nativeInputNV.hdr.dims[2], nz = nativeInputNV.hdr.dims[3];
-    const snx = seg.hdr.dims[1], sny = seg.hdr.dims[2], snz = seg.hdr.dims[3];
-
-    const applyAffine = (a, v) => [
-      a[0][0] * v[0] + a[0][1] * v[1] + a[0][2] * v[2] + a[0][3],
-      a[1][0] * v[0] + a[1][1] * v[1] + a[1][2] * v[2] + a[1][3],
-      a[2][0] * v[0] + a[2][1] * v[1] + a[2][2] * v[2] + a[2][3],
-    ];
-    const applyGL = (m, v) => [ // gl-matrix mat4 is column-major
-      m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12],
-      m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13],
-      m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14],
-    ];
-    // native storage voxel -> conformed storage voxel (fractional)
-    const f = (v) => {
-      const mm = applyAffine(A, v);
-      const ras = seg.mm2vox([mm[0], mm[1], mm[2]], true); // mm -> conformed RAS voxel
-      return applyGL(seg.toRASvox, [ras[0], ras[1], ras[2]]); // RAS -> storage voxel
-    };
-    const o = f([0, 0, 0]);
-    const ex = f([1, 0, 0]).map((x, i) => x - o[i]);
-    const ey = f([0, 1, 0]).map((x, i) => x - o[i]);
-    const ez = f([0, 0, 1]).map((x, i) => x - o[i]);
-
-    // Is this a discrete label map (segmentation) or a continuous intensity
-    // output (e.g. skull-stripped brain from Brain_Extraction/mindgrab)? Label
-    // overlays carry a colormapLabel; intensity ones use a plain colormap.
-    const isLabel = !!seg.colormapLabel;
-    const nvox = nx * ny * nz;
-    const outNV = nativeInputNV.clone();
+    const snx = conf.hdr.dims[1], sny = conf.hdr.dims[2], snz = conf.hdr.dims[3];
+    const M = voxelMap(nativeInputNV.hdr.affine, conf.hdr.affine); // native vox -> conformed vox
+    const ex = [M[0][0], M[1][0], M[2][0]];
+    const ey = [M[0][1], M[1][1], M[2][1]];
+    const ez = [M[0][2], M[1][2], M[2][2]];
+    const deltas = [];
+    for (const dx of [-0.25, 0.25])
+      for (const dy of [-0.25, 0.25])
+        for (const dz of [-0.25, 0.25])
+          deltas.push([0, 1, 2].map((r) => dx * ex[r] + dy * ey[r] + dz * ez[r]));
     const sample = (x, y, z) =>
       (x >= 0 && x < snx && y >= 0 && y < sny && z >= 0 && z < snz)
-        ? labels[x + y * snx + z * snx * sny] : 0;
-
-    if (isLabel) {
-      // 2× supersample: 8 offsets at ±0.25 native voxel, in conformed space.
-      const deltas = [];
-      for (const dx of [-0.25, 0.25])
-        for (const dy of [-0.25, 0.25])
-          for (const dz of [-0.25, 0.25])
-            deltas.push([
-              dx * ex[0] + dy * ey[0] + dz * ez[0],
-              dx * ex[1] + dy * ey[1] + dz * ez[1],
-              dx * ex[2] + dy * ey[2] + dz * ez[2],
-            ]);
-      const out = new Int16Array(nvox);
-      let maxLabel = 0;
-      const tv = new Int32Array(8), tc = new Int32Array(8); // majority tally (≤8 distinct)
-      let idx = 0;
-      for (let k = 0; k < nz; k++) {
-        for (let j = 0; j < ny; j++) {
-          let bx = o[0] + j * ey[0] + k * ez[0];
-          let by = o[1] + j * ey[1] + k * ez[1];
-          let bz = o[2] + j * ey[2] + k * ez[2];
-          for (let i = 0; i < nx; i++) {
-            let nt = 0;
-            for (let s = 0; s < 8; s++) {
-              const lbl = sample(
-                Math.round(bx + deltas[s][0]),
-                Math.round(by + deltas[s][1]),
-                Math.round(bz + deltas[s][2]));
-              let t = -1;
-              for (let q = 0; q < nt; q++) if (tv[q] === lbl) { t = q; break; }
-              if (t < 0) { tv[nt] = lbl; tc[nt] = 1; nt++; } else { tc[t]++; }
-            }
-            let best = tv[0], bc = tc[0];
-            for (let q = 1; q < nt; q++) if (tc[q] > bc) { bc = tc[q]; best = tv[q]; }
-            if (best > maxLabel) maxLabel = best;
-            out[idx++] = best;
-            bx += ex[0]; by += ex[1]; bz += ex[2];
+        ? mask[x + y * snx + z * snx * sny] : 0;
+    const out = new Uint8Array(nx * ny * nz);
+    let idx = 0;
+    for (let k = 0; k < nz; k++) {
+      for (let j = 0; j < ny; j++) {
+        let bx = M[0][3] + j * ey[0] + k * ez[0];
+        let by = M[1][3] + j * ey[1] + k * ez[1];
+        let bz = M[2][3] + j * ey[2] + k * ez[2];
+        for (let i = 0; i < nx; i++) {
+          let votes = 0;
+          for (const [ddx, ddy, ddz] of deltas) {
+            if (sample(Math.round(bx + ddx), Math.round(by + ddy), Math.round(bz + ddz))) votes++;
           }
-        }
-      }
-      outNV.hdr.datatypeCode = 4;      // DT_INT16
-      outNV.hdr.numBitsPerVoxel = 16;
-      outNV.hdr.scl_slope = 1;
-      outNV.hdr.scl_inter = 0;
-      outNV.hdr.cal_min = 0;
-      outNV.hdr.cal_max = maxLabel;
-      outNV.hdr.intent_code = 1002;    // NIFTI_INTENT_LABEL
-      outNV.img = out;
-    } else {
-      // Intensity output (skull-stripped brain): plain nearest-neighbour, keep
-      // the native datatype, and do NOT tag as LABEL — this is an image.
-      const out = outNV.img;           // native-datatype typed array, length nvox
-      out.fill(0);
-      outNV.hdr.scl_slope = 1;
-      outNV.hdr.scl_inter = 0;
-      let idx = 0;
-      for (let k = 0; k < nz; k++) {
-        for (let j = 0; j < ny; j++) {
-          let bx = o[0] + j * ey[0] + k * ez[0];
-          let by = o[1] + j * ey[1] + k * ez[1];
-          let bz = o[2] + j * ey[2] + k * ez[2];
-          for (let i = 0; i < nx; i++) {
-            out[idx++] = sample(Math.round(bx), Math.round(by), Math.round(bz));
-            bx += ex[0]; by += ex[1]; bz += ex[2];
-          }
+          out[idx++] = votes >= 4 ? 1 : 0;
+          bx += ex[0]; by += ex[1]; bz += ex[2];
         }
       }
     }
-    return outNV;
+    return out;
   }
 
   const SAVE_OPTIONS = [
     { act: () => saveCachedResult("brain"), title: "Skull-stripped brain", sub: "input intensities with background set to zero", need: "result" },
     { act: () => saveCachedResult("mask"), title: "Brain mask", sub: "binary mask, including accepted edits", need: "result" },
-    { act: saveConformedInput, title: "Input volume", sub: "the currently loaded 256³ NIfTI", need: "img" },
+    { act: saveConformedInput, title: "Input volume", sub: "the 256³, 0.1 mm volume the model sees", need: "img" },
     { act: saveScene, title: "Scene", sub: "everything, as a .nvd document", need: "img" },
   ];
 
@@ -1090,7 +1025,7 @@ async function main() {
     const lines = [header.join(",")];
     for (const r of rows) {
       lines.push([r.label, esc(r.name), r.voxels, fmt(r.volume_mm3),
-        r.min, r.max, r.q1, r.median, r.q3, fmt(r.mean), fmt(r.stdev)].join(","));
+      r.min, r.max, r.q1, r.median, r.q3, fmt(r.mean), fmt(r.stdev)].join(","));
     }
     return lines.join("\n") + "\n";
   }
@@ -1258,9 +1193,9 @@ async function main() {
   function doLoadImage() {
     // Retain the volume as loaded (native grid) before ensureConformed() may
     // replace volumes[0] with the 256³ conformed copy — needed to reslice the
-    // segmentation back to native space on export.
-    nativeInputNV = nv1.volumes[0] || null;
-    nativeInputName = (nativeInputNV && nativeInputNV.name) ? nativeInputNV.name : "input.nii.gz";
+    // segmentation back to native space on export. Overlays added later fire
+    // this callback too, so only a newly loaded base image is captured.
+    if (nv1.volumes.length === 1 && !replacingInput) nativeInputNV = nv1.volumes[0];
     opacitySlider0.oninput();
     modelSelect.value = "-1";
     if (nv1.volumes.length === 1) clearCachedResult();
@@ -1325,14 +1260,13 @@ async function main() {
   async function callbackImg(img, opts, modelEntry) {
     sculptEditor?.invalidate();
     lastInferenceModelEntry = modelEntry;
-    lastBrainMask = new Uint8Array(img.length);
+    const mask = new Uint8Array(img.length);
+    for (let i = 0; i < img.length; i++) mask[i] = img[i] !== 0 ? 1 : 0;
+    const dims = nv1.volumes[0].hdr.dims.slice(1, 4);
+    lastBrainMask = openBrainMask(mask, dims, modelEntry.maskOpeningRadius ?? 0);
     lastExtractedBrain = new nv1.volumes[0].img.constructor(img.length);
     const inputImage = nv1.volumes[0].img;
-    for (let i = 0; i < img.length; i++) {
-      const foreground = img[i] !== 0 ? 1 : 0;
-      lastBrainMask[i] = foreground;
-      lastExtractedBrain[i] = inputImage[i] * foreground;
-    }
+    for (let i = 0; i < img.length; i++) lastExtractedBrain[i] = inputImage[i] * lastBrainMask[i];
     if (maskToggle) maskToggle.disabled = false;
     await renderCachedOutput();
     sculptEditor?.updateAvailability();

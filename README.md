@@ -22,8 +22,21 @@ binary label overlay. The Save menu always offers both files.
 
 ## Input contract
 
-This version intentionally does not conform or resample inputs. NIfTI volumes
-must already be `256 × 256 × 256`. Model preprocessing uses the 2nd and 98th
+Before inference, inputs that are not already on the model's grid are conformed
+(`rodent-conform.js`) to `256 × 256 × 256` voxels of 0.1 mm in LPS storage
+order, centered on the input's field of view, using trilinear interpolation and
+the same robust 0–255 uint8 rescale as Niivue's `conform()`. Inputs already on
+that grid are used as is. The saved mask and skull-stripped brain are resliced
+back onto the original input grid (the brain keeps the original intensities).
+Headers must carry real voxel sizes: rodent scans whose headers were scaled ×10
+for human tools have to be fixed first.
+
+The predicted brain mask is cleaned with a morphological opening
+(`mask-cleanup.js`, radius `maskOpeningRadius` = 4 voxels): erode, keep the
+largest connected component, dilate back within the original mask. This cuts
+off skull or muscle attached to the brain by thin bridges; it never adds voxels.
+
+Model preprocessing uses the 2nd and 98th
 intensity percentiles with a `1e-3` denominator guard and clipping to `[0, 1]`,
 matching MindGrab in brainchop-cli.
 
