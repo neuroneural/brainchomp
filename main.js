@@ -865,9 +865,35 @@ async function main() {
       overlayVolume.img = lastExtractedBrain;
       overlayVolume.hdr.intent_code = 0;
       overlayVolume.colormap = nv1.colormaps().includes("copper2") ? "copper2" : "actc";
+      // Window the copper on the brain's own intensities. The clone inherits
+      // the whole image's range, which can start below zero (float scans),
+      // turning the zeroed background into opaque dark copper in 3D, or be set
+      // by brighter non-brain tissue, leaving the brain dim. With cal_min at 0
+      // the background maps to the colormap's transparent bottom.
+      const top = brainPercentile(0.98);
+      if (top > 0) {
+        overlayVolume.cal_min = 0;
+        overlayVolume.cal_max = top;
+      }
     }
     overlayVolume.opacity = opacitySlider1.value / 255;
     await nv1.addVolume(overlayVolume);
+  }
+
+  // Intensity at quantile q of the voxels inside the brain mask, from a sample
+  // of at most ~200k of them.
+  function brainPercentile(q) {
+    const img = lastExtractedBrain, mask = lastBrainMask;
+    let count = 0;
+    for (let i = 0; i < mask.length; i++) count += mask[i];
+    if (count === 0) return 0;
+    const stride = Math.max(1, Math.floor(count / 200000));
+    const values = [];
+    for (let i = 0, seen = 0; i < mask.length; i++) {
+      if (mask[i] && seen++ % stride === 0) values.push(img[i]);
+    }
+    values.sort((a, b) => a - b);
+    return values[Math.min(values.length - 1, Math.floor(q * values.length))];
   }
 
   // mask: 0/1 per voxel of the displayed image, already cleaned by the library.
