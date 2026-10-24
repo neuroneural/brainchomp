@@ -1,224 +1,66 @@
 import { installSculptEditor } from "./sculpt/editor.js";
 import { Niivue } from "@niivue/niivue";
-import { runInference as runInferenceTfjsMain } from "./brainchop-mainthread.js";
-import { runInferenceWebGpu } from "./inference-webgpu.js";
-import { isConformed, conformRodent, voxelMap } from "./rodent-conform.js";
-import { openBrainMask } from "./mask-cleanup.js";
-import { inferenceModelsList, brainChopOpts } from "./brainchop-parameters.js";
+import { segment, checkSupport, checkWebgl2Support } from "./vendor/brainchomp/index.js";
+import { inferenceModelsList } from "./brainchop-parameters.js";
 import { localSystemDetails } from "./brainchop-diagnostics.js";
-import MyWorker from "./brainchop-webworker.js?worker";
 import { installResponsiveLayout } from "./responsive-layout.js";
 import { installTouchViewControls } from "./touch-view.js";
 
-// --- Backend State ---
-let gpuDevice = null;
-let isWebGpuAvailable = false;
+// --- Backend state ----------------------------------------------------------
+// brainchomp-lib (vendor/brainchomp, see scripts/update-brainchomp-lib.sh) runs
+// the whole pipeline in a worker: conform to the model's 256³ 0.1 mm LPS grid,
+// normalise, the MeshNet, largest component, mask opening, and reslicing back
+// onto the input's grid. It picks WebGPU, then WebGL2, then a threaded CPU
+// module (cross-origin isolated pages only) before downloading anything.
 let lastInferenceModelEntry = null;
+let backendReport = null; // what the startup probe found, for the status chip and Diagnostics
 
-// --- Backend fallback chain state -----------------------------------------
-// runSelectedInference() tries WebGPU, then the native WebGL2 runner, then the
-// tfjs worker (fast, then seqConv), then the main thread. Every one of those
-// stages reports its own failure through callbackUI's modalMessage, which used
-// to pop a blocking window.alert -- so a user on a machine where WebGPU is
-// unavailable got "WebGPU Error: ..." and then a perfectly good segmentation
-// from the next backend. An earlier backend giving up is a console-level event.
-// Messages are collected here and only surfaced if the whole chain fails.
-let suppressBackendModals = false;
-let backendAttemptMessages = [];
+// ?backend=webgpu|webgl2|cpu forces one backend for testing; one this browser
+// cannot run is then an error rather than a fallback.
+const FORCED_BACKEND = ["webgpu", "webgl2", "cpu"].find(
+  (b) => b === new URLSearchParams(window.location.search).get("backend"));
 
-// --- DEBUG OVERRIDE -------------------------------------------------------
-// Normally false: WebGPU is used when available, WebGL2 is the fallback.
-// Set true to force every model through the WebGL2 (WebWorker / tfjs) backend
-// for debugging/benchmarking the fallback path. See the
-// `isWebGpuAvailable && !FORCE_WEBGL2_TESTING` guard in runSelectedInference().
-const FORCE_WEBGL2_TESTING = new URLSearchParams(window.location.search).get("backend") === "webgl2";
+// The library loads worker.js and its wasm modules by URL, so they are served
+// unhashed from public/brainchomp/ rather than bundled.
+const BRAINCHOMP_ASSETS = new URL(`${import.meta.env.BASE_URL}brainchomp/`, window.location.href).href;
 
-// Set true to skip the NATIVE WebGL2 runner (webgl2_runners/) and force the old
-// tfjs WebWorker path. This is the A/B control for the native runner: with
-// FORCE_WEBGL2_TESTING=true, flipping this false/true switches between the two
-// WebGL2 implementations on the same machine and the same model, which is the
-// only comparison that settles whether the port is worth it.
-const FORCE_TFJS_WEBGL_TESTING = false;
-
-// The NATIVE WebGL2 runner (webgl2_runners/) is LIVE. It is the whole point of
-// that code: when WebGPU is missing -- Firefox, older Safari, most Linux browsers,
-// many phones -- this is what makes brainchop fast instead of a several-minute
-// crawl. 8.03 s for model16chan18cls at full 256^3 on an M1, roughly brainchopC
-// parity, against a tfjs path that on Firefox cannot even reach its dense path for
-// any GroupNorm model (see TASK_webgl2_native_runner.md section 2b).
-//
-// Shipping it is safe because it DECLINES rather than breaks: runInferenceWebGl2
-// rejects on an unsupported device, a missing descriptor or safetensors, a GL
-// error, a lost context, non-finite layer-1 activations, or an all-zero volume --
-// and every rejection falls through to the tfjs worker below, which can still run
-// every model. So the worst case is exactly the old behaviour plus a console line.
-//
-// The import stays DYNAMIC on purpose, and not to hide the feature: the WebGPU
-// block above returns on success, so a WebGPU user never fetches this chunk or the
-// second tfjs copy its worker pulls in. Same reasoning as brainchopC probing
-// before it fetches its WebGL2 module.
-//
-// Outstanding: label parity against the WebGPU runner has not been diffed
-// systematically. Set FORCE_WEBGL2_TESTING below to compare the two on one volume.
-const ENABLE_NATIVE_WEBGL2 = true;
-// --------------------------------------------------------------------------
+const BACKEND_LABELS = { webgpu: "WebGPU", webgl2: "WebGL2", cpu: "CPU" };
 
 /**
- * Detects WebGPU support and initializes the device.
- * Provides detailed diagnostics for troubleshooting.
+ * Asks the library which backend this browser can run, without running it, so
+ * the status chip is right before the first segmentation.
  */
-async function initializeBackend() {
-  const diagnostics = {
-    secureContext: window.isSecureContext,
-    navigatorGpuExists: 'gpu' in navigator,
-    adapterObtained: false,
-    deviceObtained: false,
-    f16Support: false,
-    error: null
-  };
-
-  // Check secure context first
-  if (!window.isSecureContext) {
-    console.warn('WebGPU requires a secure context (HTTPS or localhost).');
-    console.warn('Current origin:', window.location.origin);
-  }
-
-  if ('gpu' in navigator) {
-    try {
-      console.log('Requesting WebGPU adapter...');
-      const adapter = await navigator.gpu.requestAdapter();
-
-      if (adapter) {
-        diagnostics.adapterObtained = true;
-        console.log('WebGPU adapter obtained:', adapter);
-
-        // Log adapter info if available
-        if (adapter.info) {
-          console.log('Adapter info:', adapter.info);
-        }
-
-        // Log adapter limits
-        console.log('Adapter limits:', {
-          maxBufferSize: adapter.limits.maxBufferSize,
-          maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-          maxComputeWorkgroupsPerDimension: adapter.limits.maxComputeWorkgroupsPerDimension
-        });
-
-        // Request the adapter's full limits. The default device limits cap
-        // maxComputeInvocationsPerWorkgroup at 256, but BEAM-tuned runners
-        // (e.g. dkatlas24) emit workgroups of 512-1024 invocations, which fail
-        // to create a ComputePipeline unless we opt into the higher limit here.
-        // Requesting the adapter's reported maximum is always valid.
-        const requiredLimits = {
-          maxBufferSize: adapter.limits.maxBufferSize,
-          maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-          maxComputeInvocationsPerWorkgroup: adapter.limits.maxComputeInvocationsPerWorkgroup,
-          maxComputeWorkgroupSizeX: adapter.limits.maxComputeWorkgroupSizeX,
-          maxComputeWorkgroupSizeY: adapter.limits.maxComputeWorkgroupSizeY,
-          maxComputeWorkgroupSizeZ: adapter.limits.maxComputeWorkgroupSizeZ,
-          maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
-          maxComputeWorkgroupsPerDimension: adapter.limits.maxComputeWorkgroupsPerDimension
-        };
-        const hasF16 = adapter.features.has("shader-f16");
-        diagnostics.f16Support = hasF16;
-        const requiredFeatures = hasF16 ? ["shader-f16"] : [];
-
-        gpuDevice = await adapter.requestDevice({ requiredLimits, requiredFeatures });
-        diagnostics.deviceObtained = true;
-
-        isWebGpuAvailable = true;
-        const f16Status = hasF16 ? "enabled" : "not available";
-        console.log(`✓ WebGPU initialized successfully. F16: ${f16Status}`);
-      } else {
-        console.warn('WebGPU adapter request returned null.');
-        console.warn('This typically means:');
-        console.warn('  - Safari: WebGPU feature flags not enabled in Settings > Feature Flags');
-        console.warn('  - Unsupported GPU hardware');
-        console.warn('  - GPU drivers need updating');
-        diagnostics.error = 'Adapter returned null';
-      }
-    } catch (e) {
-      diagnostics.error = e.message;
-      console.error('WebGPU initialization error:', e);
-
-      // Provide Safari-specific guidance
-      if (navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome')) {
-        console.warn('Safari detected. To enable WebGPU:');
-        console.warn('  1. Open Safari Settings/Preferences');
-        console.warn('  2. Go to Advanced tab, enable "Show features for web developers"');
-        console.warn('  3. Go to Feature Flags tab');
-        console.warn('  4. Enable: WebGPU, GPU Process: DOM Rendering, GPU Process: Canvas Rendering');
-        console.warn('  5. Restart Safari');
-      }
-    }
-  } else {
-    console.warn('navigator.gpu not found. WebGPU API is not available in this browser.');
-    diagnostics.error = 'navigator.gpu not found';
-
-    // Provide Firefox-specific guidance
-    if (navigator.userAgent.includes('Firefox')) {
-      console.warn('Firefox detected. To enable WebGPU in about:config:');
-      console.warn('  1. Set dom.webgpu.enabled = true');
-      console.warn('  2. Set gfx.webgpu.ignore-blocklist = true');
-      console.warn('  3. Restart Firefox');
-    }
-  }
-
-  // Update UI with backend status
-  // While FORCE_WEBGL2_TESTING is on, report WebGL even if WebGPU initialized,
-  // so the indicator matches the path actually used.
-  updateBackendStatusUI(isWebGpuAvailable && !FORCE_WEBGL2_TESTING, diagnostics);
-
-  if (!isWebGpuAvailable) {
-    console.log('Falling back to WebGL backend.');
-  }
-
-  // Store diagnostics for later access
-  window.webgpuDiagnostics = diagnostics;
-  return diagnostics;
+async function probeBackends() {
+  const webgpu = await checkSupport().catch((e) => ({ supported: false, reasons: [e.message] }));
+  // checkWebgl2Support allocates a 128 MiB test texture, so only ask when needed.
+  const webgl2 = webgpu.supported ? null : checkWebgl2Support();
+  backendReport = { secureContext: window.isSecureContext, webgpu, webgl2 };
+  const expected = FORCED_BACKEND
+    ?? (webgpu.supported ? "webgpu" : webgl2?.supported ? "webgl2" : null);
+  updateBackendStatusUI(expected);
 }
 
 /**
- * Updates the UI to display the current backend status.
+ * Updates the status chip: the backend that will run (after the probe) or did
+ * run (after a segmentation).
  */
-function updateBackendStatusUI(webgpuAvailable, diagnostics) {
+function updateBackendStatusUI(backend) {
   const statusEl = document.getElementById('backendStatus');
-  if (!statusEl) {
-    console.log('Backend status element not found in DOM');
-    return;
-  }
-
-  if (webgpuAvailable) {
-    const f16Text = diagnostics.f16Support ? ' (F16)' : '';
-    statusEl.textContent = `WebGPU${f16Text}`;
-    statusEl.style.color = '#4CAF50'; // Green
-    statusEl.title = 'WebGPU backend active - fastest performance';
-  } else {
-    statusEl.textContent = 'WebGL';
-    statusEl.style.color = '#FF9800'; // Orange
-
-    // Build helpful tooltip
-    let tooltip = 'WebGL backend (fallback)';
-    if (diagnostics.error) {
-      tooltip += `\nReason: ${diagnostics.error}`;
-    }
-    if (!diagnostics.secureContext) {
-      tooltip += '\n⚠ Not a secure context (HTTPS required)';
-    }
-    if (navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome')) {
-      tooltip += '\n\nTo enable WebGPU in Safari:\n1. Settings > Feature Flags\n2. Enable WebGPU flags\n3. Restart Safari';
-    }
-    if (navigator.userAgent.includes('Firefox')) {
-      tooltip += '\n\nTo enable WebGPU in Firefox:\n1. about:config > dom.webgpu.enabled = true\n2. gfx.webgpu.ignore-blocklist = true\n3. Restart Firefox';
-    }
-    statusEl.title = tooltip;
-  }
+  if (!statusEl) return;
+  const webgpuReasons = backendReport?.webgpu?.reasons ?? [];
+  statusEl.textContent = BACKEND_LABELS[backend] ?? "No GPU";
+  statusEl.style.color = backend === "webgpu" ? '#4CAF50' : backend ? '#FF9800' : '#F44336';
+  let tooltip = backend === "webgpu" ? 'WebGPU backend - fastest performance'
+    : backend ? `${BACKEND_LABELS[backend]} backend (fallback)` : 'Neither WebGPU nor WebGL2 can run the model here';
+  if (backend !== "webgpu" && webgpuReasons.length) tooltip += `\nWebGPU: ${webgpuReasons.join('; ')}`;
+  if (!window.isSecureContext) tooltip += '\n⚠ Not a secure context (HTTPS required)';
+  statusEl.title = tooltip;
 }
 
 async function main() {
   let diagnosticsString = "";
   let missingLabelStatus = "";
-  let chopWorker;
+  let inferenceRunning = false;
   // Raw label names / colors for the current segmentation (index -> value), used by "Save Stats".
   let lastSegLabelNames = null;
   let lastSegColors = null; // { R:[], G:[], B:[] }
@@ -236,8 +78,6 @@ async function main() {
   let originalSegImg = null;   // pristine label voxels, for restore + stats
   let isolationStats = null;   // { lines:[...], color:[r,g,b,a] } drawn as a fixed HUD
   const HUD_TEXT_SCALE = 0.9;  // relative to niivue fontPx
-  let nativeInputNV = null;    // volume as loaded (native grid), before conform
-  let replacingInput = false;  // ensureConformed() is swapping in the conformed volume
   const sampleSelect = document.getElementById("sampleSelect");
   const maskToggle = document.getElementById("maskToggle");
   const modelRunButton = document.getElementById("modelRunButton");
@@ -382,7 +222,7 @@ async function main() {
         toggle to switch the overlay between the extracted brain and its
         post-processed binary mask. The Save menu offers both outputs.</p>
         
-        <p><em>Inputs of any size or orientation are resampled to 256³ at 0.1 mm (LPS) before inference; saved masks and brains are written back on the original grid.</em></p>
+        <p><em>Inputs of any size or orientation are conformed to 256³ at 0.1 mm (LPS) for the model; the mask comes back on the image's own grid.</em></p>
       </div>
     `;
     showModal("About Brainchomp", aboutContent);
@@ -392,21 +232,14 @@ async function main() {
     let msg = diagnosticsString;
 
     // If no inference run yet, show startup diagnostics
-    if (msg.length < 1 && window.webgpuDiagnostics) {
-      const d = window.webgpuDiagnostics;
+    if (msg.length < 1 && backendReport) {
+      const d = backendReport;
       msg = ":: Startup Diagnostics ::\n";
       msg += `Secure Context: ${d.secureContext}\n`;
-      msg += `WebGPU Enabled: ${isWebGpuAvailable}\n`;
-      msg += `F16 Support: ${d.f16Support}\n`;
-      if (d.error) msg += `Error: ${d.error}\n`;
-
-      // Add browser info
+      msg += `WebGPU: ${d.webgpu.supported ? "yes" : `no (${d.webgpu.reasons.join("; ")})`}\n`;
+      if (d.webgpu.hasShaderF16 !== undefined) msg += `F16 Support: ${d.webgpu.hasShaderF16}\n`;
+      if (d.webgl2) msg += `WebGL2: ${d.webgl2.supported ? "yes" : `no (${d.webgl2.reasons.join("; ")})`}\n`;
       msg += `User Agent: ${navigator.userAgent}\n`;
-    }
-
-    // If no inference run yet, show startup diagnostics
-    if (msg.length < 1 && window.webgpuDiagnostics) {
-      // ... (existing logic to build msg)
     }
 
     if (msg.length < 1) {
@@ -442,24 +275,6 @@ async function main() {
     if (sculptEditor?.active) { nv1.setDrawOpacity(opacitySlider1.value / 255); return; }
     nv1.setOpacity(1, opacitySlider1.value / 255);
   };
-
-  // Resample the loaded volume onto the model's grid (256³, 0.1 mm, LPS) unless
-  // it is already there. The native volume stays in nativeInputNV so results
-  // can be exported back onto the original grid.
-  async function ensureConformed() {
-    const nii = nv1.volumes[0];
-    if (isConformed(nii)) return;
-    callbackUI("Conforming input to 256³ at 0.1 mm…", 0);
-    await new Promise((r) => setTimeout(r, 30)); // let the status paint before the blocking loop
-    const conformed = await conformRodent(nv1, nii);
-    replacingInput = true;
-    try {
-      await nv1.removeVolume(nii);
-      nv1.addVolume(conformed);
-    } finally {
-      replacingInput = false;
-    }
-  }
 
   async function closeAllOverlays() {
     while (nv1.volumes.length > 1) {
@@ -590,210 +405,80 @@ async function main() {
     e.preventDefault();
   }
 
-  // Wrapper: owns the "is a fallback still possible" state for callbackUI.
   async function runSelectedInference() {
-    if (suppressBackendModals || sculptEditor?.active) return; // already running or editing
-    suppressBackendModals = true;
+    if (inferenceRunning || sculptEditor?.active) return; // already running or editing
+    inferenceRunning = true;
     sculptEditor?.updateAvailability();
     if (modelRunButton) modelRunButton.disabled = true;
-    backendAttemptMessages = [];
     try {
-      await runInferenceChain();
+      await runInference();
     } catch (error) {
-      console.error("Inference could not start:", error);
-      showModal("Input not supported", escapeHtml(error?.message || String(error)));
+      console.error("Segmentation failed:", error);
+      callbackUI("Segmentation failed", 0);
+      // BrainchompError carries a machine-readable code; bad-input is the
+      // user's file, everything else is this browser or device.
+      const title = error?.code === "bad-input" ? "Input not supported" : "Segmentation failed";
+      showModal(title, `<p>${escapeHtml(error?.message || String(error))}</p>` +
+        (error?.code ? `<p style="font-size:0.88em;color:#9aa4af">Code: ${escapeHtml(error.code)}. Full details are in the browser console.</p>` : ""));
     } finally {
-      suppressBackendModals = false;
+      inferenceRunning = false;
       sculptEditor?.updateAvailability();
       if (modelRunButton) modelRunButton.disabled = false;
     }
   }
 
-  async function runInferenceChain() {
+  async function runInference() {
     const selectedModelIndex = modelSelect.value;
     if (selectedModelIndex === "-1") return;
     if (modelSelect.selectedIndex < 0) return;
 
     await closeAllOverlays();
     resetLabelIsolation(); // drop any active single-label view + its HUD
-    await ensureConformed();
 
     const modelEntry = inferenceModelsList[selectedModelIndex];
+    const input = nv1.volumes[0];
+    callbackUI(`${modelEntry.modelName}: running…`, 0);
+    const startTime = Date.now();
+    const result = await segment(await input.saveToDisk(""), {
+      worker: true,
+      backend: FORCED_BACKEND ?? "auto",
+      opening: modelEntry.maskOpeningRadius,
+      gzipOutput: false,
+      assetPath: BRAINCHOMP_ASSETS,
+      onLog: (line) => console.log("[brainchomp]", line),
+    });
+    if (nv1.volumes[0] !== input) return; // another image was loaded meanwhile
 
-    const opts = { ...brainChopOpts };
-    // Fix URL construction to handle './' base correctly and allow subfolders
-    const rootUrl = new URL(import.meta.env.BASE_URL, window.location.href).href;
-    // Remove trailing slash if present to avoid double slashes when appending paths starting with /
-    opts.rootURL = rootUrl.endsWith('/') ? rootUrl.slice(0, -1) : rootUrl;
+    const mask = niftiVoxels(result.mask);
+    const nvox = input.hdr.dims[1] * input.hdr.dims[2] * input.hdr.dims[3];
+    if (mask.length < nvox) throw new Error(`The returned mask has ${mask.length} voxels; the image has ${nvox}.`);
+    updateBackendStatusUI(result.backend);
+    callbackImg(mask.subarray(0, nvox), modelEntry);
+    const seconds = (result.elapsedMs / 1000).toFixed(1);
+    callbackUI(`${modelEntry.modelName}<br>Segmentation finished (${BACKEND_LABELS[result.backend]}, ${seconds} s)`, 1);
+    reportTelemetry({
+      Model: modelEntry.modelName,
+      Backend: BACKEND_LABELS[result.backend],
+      Worker: result.ranInWorker,
+      Inference_t: Number(seconds),
+      Input_Shape: input.hdr.dims.slice(1, 4).join("x"),
+      Status: "OK",
+      isModelFullVol: true,
+      startTime,
+    });
+  }
 
-    const niftiImage = nv1.volumes[0].img;
-
-    // 1. Try WebGPU  (skipped while FORCE_WEBGL2_TESTING is true)
-    if (isWebGpuAvailable && !FORCE_WEBGL2_TESTING && modelEntry.webgpu_safetensor) {
-      console.log("Attempting WebGPU backend...");
-
-      // Get UI state for TTA
-      const currentModelEntry = { ...modelEntry, enableTTA: false };
-
-      try {
-        await runInferenceWebGpu(gpuDevice, opts, currentModelEntry, nv1.volumes[0].hdr, niftiImage, callbackImg, callbackUI);
-        return; // Success
-      } catch (e) {
-        console.error("WebGPU inference failed, falling back to WebWorker.", e);
-      }
+  // Voxels of a uint8 NIfTI-1 or NIfTI-2 file (the library's mask output).
+  function niftiVoxels(buffer) {
+    const view = new DataView(buffer);
+    for (const little of [true, false]) {
+      const size = view.getInt32(0, little);
+      if (size === 348 && view.getInt16(70, little) === 2)
+        return new Uint8Array(buffer, view.getFloat32(108, little));
+      if (size === 540 && view.getInt16(12, little) === 2)
+        return new Uint8Array(buffer, Number(view.getBigInt64(168, little)));
     }
-
-    // 1b. Try the NATIVE WebGL2 runner (webgl2_runners/): raw GLSL, 3D textures
-    // and MRT, bypassing tfjs entirely. Any refusal -- unsupported device, no
-    // descriptor, no safetensors, a GL error, an all-zero volume -- rejects and
-    // falls through to the tfjs worker below, which can still run every model.
-    if (ENABLE_NATIVE_WEBGL2 && !FORCE_TFJS_WEBGL_TESTING && modelEntry.webgpu_safetensor) {
-      try {
-        // Dynamic so WebGPU users never fetch this chunk (see ENABLE_NATIVE_WEBGL2).
-        const { runInferenceWebGl2, nativeWebgl2Available } = await import("./inference-webgl2.js");
-        if (nativeWebgl2Available()) {
-          console.log("Attempting native WebGL2 runner...");
-          await runInferenceWebGl2(opts, modelEntry, nv1.volumes[0].hdr, niftiImage, callbackImg, callbackUI);
-          return; // Success
-        }
-        console.log("Native WebGL2 unavailable here (no OffscreenCanvas/webgl2); using the tfjs worker.");
-      } catch (e) {
-        console.warn("Native WebGL2 declined or failed, falling back to the tfjs worker.", e.message);
-      }
-    }
-
-    // 2. Try WebWorker (WebGL)
-    console.log("Attempting WebWorker backend...");
-    if (typeof chopWorker !== "undefined") {
-      console.log("Worker is busy. Please wait.");
-      return;
-    }
-
-    const plainNiftiHeader = {
-      dims: nv1.volumes[0].hdr.dims,
-      datatypeCode: nv1.volumes[0].hdr.datatypeCode,
-    };
-
-    const runWorker = (useSeqConv) => {
-      return new Promise((resolve, reject) => {
-        const currentOpts = { ...opts, enableSeqConv: useSeqConv };
-        const currentModelEntry = { ...modelEntry, enableSeqConv: useSeqConv, enableTTA: false };
-
-        chopWorker = new MyWorker({ type: "module" });
-        chopWorker.postMessage({ opts: currentOpts, modelEntry: currentModelEntry, niftiHeader: plainNiftiHeader, niftiImage });
-
-        chopWorker.onmessage = function (event) {
-          const { cmd, message, progressFrac, modalMessage, statData, img, opts, modelEntry } = event.data;
-          if (cmd === "ui") {
-            if (modalMessage) {
-              chopWorker.terminate();
-              chopWorker = undefined;
-              // Check for failure status or error message
-              if (statData && statData.Status === 'Fail') {
-                reject(new Error(statData.Error_Type || modalMessage));
-                return;
-              }
-              // Some errors might be passed as modalMessage without statData
-              if (typeof modalMessage === 'string' && (modalMessage.toLowerCase().includes('fail') || modalMessage.toLowerCase().includes('error') || modalMessage.toLowerCase().includes('compatible') || modalMessage.toLowerCase().includes('texture') || modalMessage.toLowerCase().includes('maximum'))) {
-                reject(new Error(modalMessage));
-                return;
-              }
-            }
-            callbackUI(message, progressFrac, modalMessage, statData);
-          }
-          if (cmd === "img") {
-            chopWorker.terminate();
-            chopWorker = undefined;
-            callbackImg(img, opts, modelEntry);
-            resolve();
-          }
-        };
-        chopWorker.onerror = function (e) {
-          console.error("WebWorker failed", e);
-          chopWorker.terminate();
-          chopWorker = undefined;
-          reject(e);
-        };
-      });
-    };
-
-    try {
-      console.log("Attempting WebWorker with enableSeqConv: false");
-      await runWorker(false);
-      return;
-    } catch (e) {
-      console.warn("WebWorker (fast) failed, retrying with enableSeqConv: true", e);
-
-      // Explicitly terminate worker if it's still around
-      if (typeof chopWorker !== "undefined") {
-        chopWorker.terminate();
-        chopWorker = undefined;
-      }
-
-      // Delay to allow WebGL context cleanup
-      console.log("Waiting 1000ms for WebGL context cleanup...");
-      await new Promise(r => setTimeout(r, 1000));
-
-      try {
-        console.log("Attempting WebWorker with enableSeqConv: true");
-        await runWorker(true); // Retry with seqConv
-        return;
-      } catch (e2) {
-        console.error("WebWorker (slow) failed, falling back to Main Thread.", e2);
-      }
-    }
-
-    // 3. Fallback to Main Thread
-    console.log("Attempting Main Thread backend...");
-
-    const runMainThread = (useSeqConv) => {
-      return new Promise((resolve, reject) => {
-        const currentOpts = { ...opts, enableSeqConv: useSeqConv };
-        const currentModelEntry = { ...modelEntry, enableSeqConv: useSeqConv };
-
-        // Proxy callbackUI to intercept errors
-        const proxyCallbackUI = (message, progressFrac, modalMessage, statData) => {
-          if (statData && statData.Status === 'Fail') {
-            reject(new Error(statData.Error_Type || modalMessage || "Inference Failed"));
-            // We still call original callback to show error to user? 
-            // Actually if we are falling back, we might NOT want to show the error yet?
-            // But the existing code shows it. Let's let it show for now, or maybe suppress if we are going to retry.
-            // For now, let's just reject.
-          } else if (modalMessage && typeof modalMessage === 'string' && (modalMessage.toLowerCase().includes('fail') || modalMessage.toLowerCase().includes('error') || modalMessage.toLowerCase().includes('compatible') || modalMessage.toLowerCase().includes('texture') || modalMessage.toLowerCase().includes('maximum'))) {
-            reject(new Error(modalMessage));
-          }
-
-          // If we are rejecting, we might want to prevent the UI from showing the error if we are going to retry.
-          // But modifying callbackUI logic deeply is risky. 
-          // Let's just pass it through. The user might see "Error" then "Retrying..."
-          callbackUI(message, progressFrac, modalMessage, statData);
-        };
-
-        // Proxy callbackImg to resolve
-        const proxyCallbackImg = (img, opts, modelEntry) => {
-          callbackImg(img, opts, modelEntry);
-          resolve();
-        };
-
-        runInferenceTfjsMain(currentOpts, currentModelEntry, nv1.volumes[0].hdr, niftiImage, proxyCallbackImg, proxyCallbackUI)
-          .catch(e => reject(e));
-      });
-    };
-
-    try {
-      console.log("Attempting Main Thread with enableSeqConv: false");
-      await runMainThread(false);
-    } catch (e) {
-      console.warn("Main Thread (fast) failed, retrying with enableSeqConv: true", e);
-      await new Promise(r => setTimeout(r, 100)); // Small delay
-      try {
-        console.log("Attempting Main Thread with enableSeqConv: true");
-        await runMainThread(true);
-      } catch (e2) {
-        console.error("Main Thread (slow) failed.", e2);
-        showBackendFailure(e2);
-      }
-    }
+    throw new Error("The returned mask is not a uint8 NIfTI file.");
   }
 
   modelSelect.onchange = runSelectedInference;
@@ -834,33 +519,6 @@ async function main() {
       window.alert("No result to save (run Skull-strip first).");
       return;
     }
-    // Results live on the conformed grid; if the input had to be conformed,
-    // export them on the grid the user loaded instead.
-    if (nativeInputNV && nativeInputNV !== nv1.volumes[0]) {
-      callbackUI("Reslicing to native space…", 0);
-      await new Promise((r) => setTimeout(r, 30)); // let the status paint before the blocking loop
-      const mask = resliceMaskToNative(lastBrainMask);
-      const outputVolume = nativeInputNV.clone();
-      if (kind === "mask") {
-        const d = nativeInputNV.hdr.dims;
-        outputVolume.hdr.dims = [3, d[1], d[2], d[3], 1, 1, 1, 1];
-        Object.assign(outputVolume.hdr, { scl_inter: 0, scl_slope: 1, cal_min: 0, cal_max: 1 });
-        outputVolume.img = mask;
-        outputVolume.hdr.datatypeCode = 2; // DT_UINT8
-        outputVolume.hdr.numBitsPerVoxel = 8;
-        outputVolume.hdr.intent_code = 1002; // NIFTI_INTENT_LABEL
-        await outputVolume.saveToDisk("brainmask.nii.gz");
-      } else {
-        // Original intensities (and datatype/scaling) with non-brain voxels zeroed.
-        const img = outputVolume.img;
-        const nvox = mask.length;
-        for (let i = 0; i < img.length; i++) if (!mask[i % nvox]) img[i] = 0;
-        outputVolume.hdr.intent_code = 0;
-        await outputVolume.saveToDisk("skull_stripped_brain.nii.gz");
-      }
-      callbackUI("Saved native-space result.", 1);
-      return;
-    }
     const outputVolume = await nv1.volumes[0].clone();
     outputVolume.zeroImage();
     Object.assign(outputVolume.hdr, { scl_inter: 0, scl_slope: 1 });
@@ -877,7 +535,7 @@ async function main() {
     outputVolume.saveToDisk("skull_stripped_brain.nii.gz");
   }
 
-  function saveConformedInput() {
+  function saveInputVolume() {
     if (nv1.volumes.length < 1) { window.alert("No image loaded."); return; }
     nv1.volumes[0].saveToDisk("input.nii.gz");
   }
@@ -887,50 +545,10 @@ async function main() {
     await withPristineLabels(async () => { await nv1.saveDocument("brainchomp.nvd"); });
   }
 
-  // Reslice a binary mask on the conformed grid onto the native input grid:
-  // nearest-neighbour with 2× supersampling and a majority vote per output
-  // voxel (ties keep the mask), for crisp boundaries when native voxels are
-  // larger than 0.1 mm.
-  function resliceMaskToNative(mask) {
-    const conf = nv1.volumes[0];
-    const nx = nativeInputNV.hdr.dims[1], ny = nativeInputNV.hdr.dims[2], nz = nativeInputNV.hdr.dims[3];
-    const snx = conf.hdr.dims[1], sny = conf.hdr.dims[2], snz = conf.hdr.dims[3];
-    const M = voxelMap(nativeInputNV.hdr.affine, conf.hdr.affine); // native vox -> conformed vox
-    const ex = [M[0][0], M[1][0], M[2][0]];
-    const ey = [M[0][1], M[1][1], M[2][1]];
-    const ez = [M[0][2], M[1][2], M[2][2]];
-    const deltas = [];
-    for (const dx of [-0.25, 0.25])
-      for (const dy of [-0.25, 0.25])
-        for (const dz of [-0.25, 0.25])
-          deltas.push([0, 1, 2].map((r) => dx * ex[r] + dy * ey[r] + dz * ez[r]));
-    const sample = (x, y, z) =>
-      (x >= 0 && x < snx && y >= 0 && y < sny && z >= 0 && z < snz)
-        ? mask[x + y * snx + z * snx * sny] : 0;
-    const out = new Uint8Array(nx * ny * nz);
-    let idx = 0;
-    for (let k = 0; k < nz; k++) {
-      for (let j = 0; j < ny; j++) {
-        let bx = M[0][3] + j * ey[0] + k * ez[0];
-        let by = M[1][3] + j * ey[1] + k * ez[1];
-        let bz = M[2][3] + j * ey[2] + k * ez[2];
-        for (let i = 0; i < nx; i++) {
-          let votes = 0;
-          for (const [ddx, ddy, ddz] of deltas) {
-            if (sample(Math.round(bx + ddx), Math.round(by + ddy), Math.round(bz + ddz))) votes++;
-          }
-          out[idx++] = votes >= 4 ? 1 : 0;
-          bx += ex[0]; by += ex[1]; bz += ex[2];
-        }
-      }
-    }
-    return out;
-  }
-
   const SAVE_OPTIONS = [
     { act: () => saveCachedResult("brain"), title: "Skull-stripped brain", sub: "input intensities with background set to zero", need: "result" },
     { act: () => saveCachedResult("mask"), title: "Brain mask", sub: "binary mask, including accepted edits", need: "result" },
-    { act: saveConformedInput, title: "Input volume", sub: "the 256³, 0.1 mm volume the model sees", need: "img" },
+    { act: saveInputVolume, title: "Input volume", sub: "the loaded image, as shown", need: "img" },
     { act: saveScene, title: "Scene", sub: "everything, as a .nvd document", need: "img" },
   ];
 
@@ -1191,11 +809,6 @@ async function main() {
   };
 
   function doLoadImage() {
-    // Retain the volume as loaded (native grid) before ensureConformed() may
-    // replace volumes[0] with the 256³ conformed copy — needed to reslice the
-    // segmentation back to native space on export. Overlays added later fire
-    // this callback too, so only a newly loaded base image is captured.
-    if (nv1.volumes.length === 1 && !replacingInput) nativeInputNV = nv1.volumes[0];
     opacitySlider0.oninput();
     modelSelect.value = "-1";
     if (nv1.volumes.length === 1) clearCachedResult();
@@ -1257,16 +870,14 @@ async function main() {
     await nv1.addVolume(overlayVolume);
   }
 
-  async function callbackImg(img, opts, modelEntry) {
+  // mask: 0/1 per voxel of the displayed image, already cleaned by the library.
+  async function callbackImg(mask, modelEntry) {
     sculptEditor?.invalidate();
     lastInferenceModelEntry = modelEntry;
-    const mask = new Uint8Array(img.length);
-    for (let i = 0; i < img.length; i++) mask[i] = img[i] !== 0 ? 1 : 0;
-    const dims = nv1.volumes[0].hdr.dims.slice(1, 4);
-    lastBrainMask = openBrainMask(mask, dims, modelEntry.maskOpeningRadius ?? 0);
-    lastExtractedBrain = new nv1.volumes[0].img.constructor(img.length);
+    lastBrainMask = Uint8Array.from(mask, (v) => (v ? 1 : 0));
+    lastExtractedBrain = new nv1.volumes[0].img.constructor(mask.length);
     const inputImage = nv1.volumes[0].img;
-    for (let i = 0; i < img.length; i++) lastExtractedBrain[i] = inputImage[i] * lastBrainMask[i];
+    for (let i = 0; i < mask.length; i++) lastExtractedBrain[i] = inputImage[i] * lastBrainMask[i];
     if (maskToggle) maskToggle.disabled = false;
     await renderCachedOutput();
     sculptEditor?.updateAvailability();
@@ -1302,15 +913,7 @@ async function main() {
       modelProgress.value = progressFrac * modelProgress.max;
     }
     if (modalMessage) {
-      if (suppressBackendModals) {
-        // A backend declined; the next one in the chain still gets a go. Keep
-        // it out of the user's way -- console + the memstatus indicator above
-        // are the signal. showBackendFailure() reports these if nothing works.
-        backendAttemptMessages.push(String(modalMessage));
-        console.warn("[backend]", modalMessage);
-      } else {
-        showModal("Message", escapeHtml(String(modalMessage)).replace(/\n/g, "<br>"));
-      }
+      showModal("Message", escapeHtml(String(modalMessage)).replace(/\n/g, "<br>"));
     }
     if (statData && Object.keys(statData).length > 0) {
       reportTelemetry(statData);
@@ -1340,7 +943,7 @@ async function main() {
     nv: nv1,
     getState: () => lastBrainMask ? {
       mask: lastBrainMask, dims: nv1.volumes[0].hdr.dims.slice(1, 4),
-      affine: nv1.volumes[0].hdr.affine, running: suppressBackendModals,
+      affine: nv1.volumes[0].hdr.affine, running: inferenceRunning,
     } : null,
     prepare: async () => {
       resetLabelIsolation();
@@ -1473,7 +1076,7 @@ async function main() {
   modelSelect.value = "-1";
   setPen(-1);
 
-  await initializeBackend();
+  await probeBackends();
 
   // --- FIX IS HERE ---
   // Use URLSearchParams to correctly parse the query string.
@@ -1488,25 +1091,6 @@ async function main() {
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
-
-// Every backend failed: this is the one point in the chain where the user does
-// need a dialog. Include what each backend said, since that is the useful part
-// for a bug report -- and use the in-app modal rather than window.alert, which
-// blocks the event loop and looks like a browser error.
-function showBackendFailure(lastError) {
-  const reasons = backendAttemptMessages.length
-    ? backendAttemptMessages
-    : [lastError && lastError.message ? lastError.message : String(lastError || "unknown error")];
-  const list = reasons
-    .map((r) => `<li>${escapeHtml(r)}</li>`)
-    .join("");
-  showModal(
-    "Segmentation failed",
-    `<p>No available backend could run this model on this device.</p>
-     <ul style="margin:0 0 4px 1.1em;padding:0;font-size:0.92em;line-height:1.45">${list}</ul>
-     <p style="font-size:0.88em;color:#9aa4af">Full details are in the browser console and under Diagnostics.</p>`
-  );
 }
 
 // Helper to show custom modal
