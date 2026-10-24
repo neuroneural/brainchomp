@@ -44,6 +44,9 @@ const sharedRodentModel = {
   textureSize: 0,
   isPostProcessEnable: true,
   returnMaskForExtraction: true,
+  // Voxels (0.1 mm) of morphological opening on the brain mask, which cuts
+  // skull/muscle attached by thin bridges; 0 disables. See mask-cleanup.js.
+  maskOpeningRadius: 4,
   inferenceDelay: 100,
   warning: null
 }
