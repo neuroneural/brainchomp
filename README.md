@@ -8,9 +8,9 @@ Live app: [neuroneural.net/brainchomp](https://neuroneural.net/brainchomp/)
 
 ## Model and outputs
 
-The single **Skull-strip** model runs the rodent MeshNet and retains its largest
-connected foreground component. One inference produces both downloadable
-outputs:
+The single **Skull-strip** model is run by
+[brainchomp-lib](https://github.com/neuroneural/brainchomp-lib). One inference
+produces both downloadable outputs:
 
 - a skull-stripped image that preserves the input intensities and sets
   non-brain voxels to zero;
@@ -22,23 +22,16 @@ binary label overlay. The Save menu always offers both files.
 
 ## Input contract
 
-Before inference, inputs that are not already on the model's grid are conformed
-(`rodent-conform.js`) to `256 × 256 × 256` voxels of 0.1 mm in LPS storage
-order, centered on the input's field of view, using trilinear interpolation and
-the same robust 0–255 uint8 rescale as Niivue's `conform()`. Inputs already on
-that grid are used as is. The saved mask and skull-stripped brain are resliced
-back onto the original input grid (the brain keeps the original intensities).
+The model was trained on `256 × 256 × 256` volumes of 0.1 mm voxels stored in
+LPS order. brainchomp-lib conforms any other input to that grid (trilinear,
+centered on the input's field of view, robust 0–255 rescale), normalizes with
+the 2nd and 98th intensity percentiles, keeps the largest connected component,
+applies a morphological opening (`maskOpeningRadius` = 4 voxels) that cuts off
+skull or muscle attached by thin bridges, and returns the mask on the input's
+own grid. The app displays and edits the image as loaded.
+
 Headers must carry real voxel sizes: rodent scans whose headers were scaled ×10
 for human tools have to be fixed first.
-
-The predicted brain mask is cleaned with a morphological opening
-(`mask-cleanup.js`, radius `maskOpeningRadius` = 4 voxels): erode, keep the
-largest connected component, dilate back within the original mask. This cuts
-off skull or muscle attached to the brain by thin bridges; it never adds voxels.
-
-Model preprocessing uses the 2nd and 98th
-intensity percentiles with a `1e-3` denominator guard and clipping to `[0, 1]`,
-matching MindGrab in brainchop-cli.
 
 Two bundled volumes can be selected from the toolbar:
 
@@ -51,15 +44,21 @@ volumes.
 
 ## Model and runtimes
 
-The single checkpoint is a 25-block MeshNet with 16 hidden channels,
-non-affine per-channel GroupNorm, GELU, and two output classes. Foreground is
-class 1. The app prefers the generated fp16 WebGPU runner and falls back to the
-native WebGL2 runner. A TF.js model is retained as a final compatibility
-fallback.
+The model is a 13-block MeshNet with 16 channels, dilations
+1,3,5,7,13,19,31,19,13,7,5,3,1, GroupNorm with a per-channel affine, GELU, and
+two output classes. brainchomp-lib runs it in a Web Worker on WebGPU (fp16,
+needs `shader-f16`), falling back to WebGL2, then to a threaded CPU module that
+only starts on cross-origin isolated pages (not GitHub Pages).
 
-The WebGPU export uses the low-memory Brainchop pipeline: fp16 activation
-storage, fp32-safe GroupNorm conditioning, and fused two-class argmax. The
-largest individual activation buffer is 512 MiB.
+Until the library is published on npm under its final name, its build is
+vendored: `vendor/brainchomp/` holds the API (bundled with the app) and
+`public/brainchomp/` the worker and wasm modules (loaded by URL).
+`vendor/brainchomp/VERSION` records the library commit. To update:
+
+```sh
+(cd ../brainchomp-lib/js && npm run build)
+scripts/update-brainchomp-lib.sh ../brainchomp-lib
+```
 
 ## Development
 
@@ -68,18 +67,8 @@ npm ci
 npm run dev
 ```
 
-Build and verification:
-
-```sh
-npm run build
-node tests/webgl2_gate.mjs chromium
-```
-
-Append `?backend=webgl2` to the app URL to exercise the native WebGL2 fallback
-on a browser that also supports WebGPU.
-
-The model conversion inputs and reproducibility manifest live in
-`temporaryRodentModel/`; browser-ready assets live in `public/models/rodent/`.
+Append `?backend=webgl2` (or `webgpu`, `cpu`) to the app URL to force one
+backend; one the browser cannot run is then reported as an error.
 
 ## License
 

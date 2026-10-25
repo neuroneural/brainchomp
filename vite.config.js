@@ -33,10 +33,6 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // Split TensorFlow.js into its own chunk (largest dependency)
-          if (id.includes('@tensorflow/tfjs')) {
-            return 'vendor-tf';
-          }
           // NiiVue visualization library
           if (id.includes('@niivue/niivue')) {
             return 'vendor-niivue';
