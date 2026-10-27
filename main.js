@@ -966,9 +966,9 @@ async function main() {
   const nv1 = new Niivue(defaults);
   await nv1.attachTo("gl1");
   // Brighten every colormap (scan, brain overlay and mask) in all four panels:
-  // rodent scans read dark at gamma 1. 1.6 lifts shadows and mid-tones without
-  // washing out the copper overlay, which turns beige above ~2.
-  nv1.setGamma(1.6);
+  // rodent scans read dark at gamma 1. 2 lifts shadows and mid-tones without
+  // clipping bright tissue; much higher washes the copper overlay out to beige.
+  nv1.setGamma(2);
   sculptEditor = installSculptEditor({
     nv: nv1,
     getState: () => lastBrainMask ? {
