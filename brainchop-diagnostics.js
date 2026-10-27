@@ -152,9 +152,9 @@ async function localSystemDetails(statData, gl = null) {
   // -- Timing data to collect
   const today = new Date()
   if (statData.isModelFullVol) {
-    statData.Brainchop_Ver = 'FullVolume'
+    statData.Volume_Mode = 'FullVolume'
   } else {
-    statData.Brainchop_Ver = 'SubVolumes'
+    statData.Volume_Mode = 'SubVolumes'
   }
 
   /* let geoData = getBrowserLocationInfo()
@@ -179,7 +179,6 @@ async function localSystemDetails(statData, gl = null) {
   statData.GPU_Vendor_Full = await detectGPUVendor_v0(gl)
   statData.GPU_Card_Full = await detectGPUCardType_v0(gl)
   statData.CPU_Cores = await getCPUNumCores()
-  statData.Which_Brainchop = 'latest'
   if (await isChrome()) {
     statData.Heap_Size_MB = window.performance.memory.totalJSHeapSize / (1024 * 1024).toFixed(2)
     statData.Used_Heap_MB = window.performance.memory.usedJSHeapSize / (1024 * 1024).toFixed(2)

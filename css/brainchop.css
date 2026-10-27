@@ -55,14 +55,6 @@ header {
   color: var(--text-color);
 }
 
-.brand-mark {
-  width: 38px;
-  height: 38px;
-  object-fit: contain;
-  flex: 0 0 auto;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
-}
-
 /* Spacers / dividers */
 .tb-flex {
   flex: 1 1 auto;
@@ -520,49 +512,6 @@ progress::-webkit-progress-value {
 progress::-moz-progress-bar {
   background: linear-gradient(90deg, #3b82f6, #60a5fa);
   border-radius: 999px;
-}
-
-/* GitHub star — the only interactive element in the bar */
-.star-link {
-  text-decoration: none;
-}
-
-.github-star {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  font-size: 12px;
-  font-weight: 700;
-  color: #e8eaed;
-  line-height: 1;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-}
-
-.github-star:hover {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.4);
-  transform: translateY(-1px);
-}
-
-.github-star .star-glyph {
-  color: #f7c948;
-  font-size: 13px;
-}
-
-/* Override niivue.css's ID-specific star styling (white box, borders). */
-.github-star #star-count {
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  border-radius: 0;
-  font-size: 12px;
-  font-weight: 700;
-  color: #e8eaed;
 }
 
 /* Narrow screens: tighten spacing, shrink progress, collapse status labels to

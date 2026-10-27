@@ -22,7 +22,7 @@ const FORCED_BACKEND = ["webgpu", "webgl2", "cpu"].find(
 
 // The library loads worker.js and its wasm modules by URL, so they are served
 // unhashed from public/brainchomp/ rather than bundled.
-const BRAINCHOMP_ASSETS = new URL(`${import.meta.env.BASE_URL}brainchomp/`, window.location.href).href;
+const BRAINCHOMP_ASSETS = new URL(`${import.meta.env.BASE_URL}skullstrip/`, window.location.href).href;
 
 const BACKEND_LABELS = { webgpu: "WebGPU", webgl2: "WebGL2", cpu: "CPU" };
 
@@ -209,7 +209,7 @@ async function main() {
     const aboutContent = `
       <div style="text-align: left; font-size: 0.95em;">
         <p><strong>🔒 Privacy First</strong><br>
-        Brainchomp runs entirely <strong>locally in your browser</strong>. Your imaging data never leaves your device.</p>
+        This tool runs entirely <strong>locally in your browser</strong>. Your imaging data never leaves your device.</p>
 
         <p><strong>⌨️ Controls</strong><br>
         • <strong>Drag & Drop</strong> a rodent NIfTI file to open.<br>
@@ -225,7 +225,7 @@ async function main() {
         <p><em>Inputs of any size or orientation are conformed to 256³ at 0.1 mm (LPS) for the model; the mask comes back on the image's own grid.</em></p>
       </div>
     `;
-    showModal("About Brainchomp", aboutContent);
+    showModal("About", aboutContent);
   };
 
   diagnosticsBtn.onclick = function () {
@@ -445,7 +445,7 @@ async function main() {
       opening: modelEntry.maskOpeningRadius,
       gzipOutput: false,
       assetPath: BRAINCHOMP_ASSETS,
-      onLog: (line) => console.log("[brainchomp]", line),
+      onLog: (line) => console.log("[skullstrip]", line),
     });
     if (nv1.volumes[0] !== input) return; // another image was loaded meanwhile
 
@@ -542,7 +542,7 @@ async function main() {
 
   async function saveScene() {
     if (nv1.volumes.length < 1) { window.alert("No image loaded."); return; }
-    await withPristineLabels(async () => { await nv1.saveDocument("brainchomp.nvd"); });
+    await withPristineLabels(async () => { await nv1.saveDocument("scene.nvd"); });
   }
 
   const SAVE_OPTIONS = [
@@ -919,7 +919,7 @@ async function main() {
       }
     }
     statData = await localSystemDetails(statData, nv1.gl);
-    diagnosticsString = ":: Diagnostics https://github.com/neuroneural/brainchop/issues ::\n";
+    diagnosticsString = ":: Diagnostics ::\n";
     for (const key in statData) {
       if (statData[key] !== null && statData[key] !== undefined) {
         diagnosticsString += `${key}: ${statData[key]}\n`;
@@ -1145,17 +1145,6 @@ function showModal(title, message, opts = {}) {
   dialog.showModal();
 }
 
-async function updateStarCount() {
-  try {
-    const response = await fetch("https://api.github.com/repos/neuroneural/brainchop");
-    const data = await response.json();
-    document.getElementById("star-count").textContent = data.stargazers_count;
-  } catch (error) {
-    console.error("Error fetching star count:", error);
-  }
-}
-
 (async function () {
   await main();
-  await updateStarCount();
 })();
