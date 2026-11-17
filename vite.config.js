@@ -3,7 +3,7 @@ import viteCompression from 'vite-plugin-compression'
 
 export default defineConfig({
   root: '.',
-  base: './', // Relative assets work at neuroneural.net/brainchomp/ and locally.
+  base: './', // Relative assets work at brainchomp.org and locally.
   plugins: [
     // Generate gzip compressed files
     viteCompression({

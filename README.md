@@ -4,7 +4,7 @@ Brainchomp is a browser-only rodent brain-extraction app derived from
 [Brainchop](https://github.com/neuroneural/brainchop-test). Imaging data stays
 on the user's device.
 
-Live app: [neuroneural.net/brainchomp](https://neuroneural.net/brainchomp/)
+Live app: [brainchomp.org](https://brainchomp.org/)
 
 ## Model and outputs
 
