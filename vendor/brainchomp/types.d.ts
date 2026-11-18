@@ -18,6 +18,12 @@ export interface SegmentOptions {
      */
     opening?: number;
     /**
+     * Fill enclosed cavities in the mask (background with no path to the edge of
+     * the volume) as brain, after the opening. It only ever adds voxels.
+     * Default true.
+     */
+    fillHoles?: boolean;
+    /**
      * Return both outputs on the model's 256^3 0.1 mm LPS grid instead of the
      * input's own grid. Off by default: outputs line up with the file you gave.
      * For an input already on that grid the two are the same.

@@ -26,7 +26,7 @@ export declare function checkCpuSupport(): {
  *
  * Takes a NIfTI file image (gzipped or not) and returns two: the skull-stripped
  * image and the binary brain mask. The whole chain -- conform to the model's
- * 256^3 0.1 mm grid, normalise, the MeshNet, largest component, mask opening,
+ * 256^3 0.1 mm grid, normalise, the MeshNet, largest component, mask opening, hole filling,
  * and reslicing back onto the input's grid -- runs inside the wasm module; this
  * function owns only what the module does not: gzip, device and context
  * acquisition, the cross-origin-isolation probe, and deciding to refuse.
