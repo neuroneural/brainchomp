@@ -368,6 +368,12 @@ function buildArgs(options) {
       );
     args.push("--opening", String(options.opening));
   }
+  if (options.fillHoles !== void 0 && typeof options.fillHoles !== "boolean")
+    throw new BrainchompError(
+      "unsupported-option",
+      `fillHoles must be true or false, got ${String(options.fillHoles)}`
+    );
+  if (options.fillHoles === false) args.push("--no-fill-holes");
   if (options.saveConform) args.push("--save-conform");
   return args;
 }

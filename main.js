@@ -9,9 +9,10 @@ import { installTouchViewControls } from "./touch-view.js";
 // --- Backend state ----------------------------------------------------------
 // brainchomp-lib (vendor/brainchomp, see scripts/update-brainchomp-lib.sh) runs
 // the whole pipeline in a worker: conform to the model's 256³ 0.1 mm LPS grid,
-// normalise, the MeshNet, largest component, mask opening, and reslicing back
-// onto the input's grid. It picks WebGPU, then WebGL2, then a threaded CPU
-// module (cross-origin isolated pages only) before downloading anything.
+// normalise, the MeshNet, largest component, mask opening, hole filling, and
+// reslicing back onto the input's grid. It picks WebGPU, then WebGL2, then a
+// threaded CPU module (cross-origin isolated pages only) before downloading
+// anything.
 let lastInferenceModelEntry = null;
 let backendReport = null; // what the startup probe found, for the status chip and Diagnostics
 
