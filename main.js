@@ -440,7 +440,9 @@ async function main() {
     const input = nv1.volumes[0];
     callbackUI(`${modelEntry.modelName}: running…`, 0);
     const startTime = Date.now();
-    const result = await segment(await input.saveToDisk(""), {
+    const nifti = await input.saveToDisk("");
+    if (modelEntry.inputWorldRemap) remapNiftiAffine(nifti, input.hdr.affine, modelEntry.inputWorldRemap);
+    const result = await segment(nifti, {
       worker: true,
       backend: FORCED_BACKEND ?? "auto",
       opening: modelEntry.maskOpeningRadius,
@@ -467,6 +469,18 @@ async function main() {
       isModelFullVol: true,
       startTime,
     });
+  }
+
+  // Rewrites the sform of NiiVue's uncompressed little-endian NIfTI-1 export to
+  // remap·affine. Conform recentres, so only the linear part matters; the mask
+  // returns on the same voxel grid, so nothing needs undoing.
+  function remapNiftiAffine(nifti, affine, remap) {
+    const view = new DataView(nifti.buffer, nifti.byteOffset);
+    view.setInt16(252, 0, true); // qform_code: make readers use the sform
+    for (let r = 0; r < 3; r++)
+      for (let c = 0; c < 4; c++)
+        view.setFloat32(280 + 16 * r + 4 * c,
+          remap[r][0] * affine[0][c] + remap[r][1] * affine[1][c] + remap[r][2] * affine[2][c], true);
   }
 
   // Voxels of a uint8 NIfTI-1 or NIfTI-2 file (the library's mask output).
@@ -579,6 +593,61 @@ async function main() {
 
   const saveBtn = document.getElementById("saveBtn");
   if (saveBtn) saveBtn.onclick = openSaveModal;
+
+  // --- Reorient: quadruped scans are often labelled as bipeds (HFS/HFP swaps
+  // prone and supine). Ask where the on-screen A, S and L labels (neurological view) really point,
+  // then rewrite the header affine; voxels are untouched.
+  const DIRS = { R: [1, 0, 0], L: [-1, 0, 0], A: [0, 1, 0], P: [0, -1, 0], S: [0, 0, 1], I: [0, 0, -1] };
+  const DIR_NAMES = { R: "Right", L: "Left", A: "Anterior (nose)", P: "Posterior (tail)", S: "Superior (back)", I: "Inferior (belly)" };
+  const axisOf = (d) => DIRS[d].findIndex((v) => v !== 0);
+
+  function openReorientModal() {
+    if (nv1.volumes.length < 1 || inferenceRunning || sculptEditor?.active) return;
+    if ((lastBrainMask || nv1.drawBitmap?.some(Boolean)) &&
+      !window.confirm("Reorienting discards the segmentation, its edits and any pending drawing. Continue?")) return;
+    const picks = [];
+    showModal("Reorient", "", { hideClose: true, saveMode: true });
+    const msg = document.getElementById("dialogMessage");
+    const ask = () => {
+      const used = picks.map(axisOf);
+      const free = Object.keys(DIRS).filter((d) => !used.includes(axisOf(d)));
+      const label = ["A", "S", "L"][picks.length];
+      const opts = free.map((d) => `<button type="button" class="save-opt" data-d="${d}"><span class="save-opt-title">${DIR_NAMES[d]}</span></button>`);
+      // Left/right is often unclear to users; a proper rotation is the safe guess.
+      if (label === "L") opts.push(`<button type="button" class="save-opt" data-d="?"><span class="save-opt-title">Not sure</span><span class="save-opt-sub">assume the scan is not mirrored</span></button>`);
+      msg.innerHTML = `<p>Step ${picks.length + 1} of 3: the <b>${label}</b> label actually points toward the animal's</p><div class="save-options">${opts.join("")}</div>`;
+      msg.querySelectorAll(".save-opt").forEach((btn) => {
+        btn.onclick = () => {
+          picks.push(btn.dataset.d);
+          if (picks.length < 3) return ask();
+          document.getElementById("appDialog").close();
+          applyReorient(picks);
+        };
+      });
+    };
+    ask();
+  }
+
+  async function applyReorient([a, s, l]) {
+    if (a === "A" && s === "S" && (l === "L" || l === "?")) return; // identity
+    const dA = DIRS[a], dS = DIRS[s];
+    // R = A × S for a proper rotation.
+    const dR = l === "?" ? [dA[1] * dS[2] - dA[2] * dS[1], dA[2] * dS[0] - dA[0] * dS[2], dA[0] * dS[1] - dA[1] * dS[0]] : DIRS[l].map((v) => -v);
+    // Columns: where the current R, A, S world axes truly point.
+    const remap = [0, 1, 2].map((i) => [dR[i], dA[i], dS[i]]);
+    const vol = nv1.volumes[0];
+    const nifti = await vol.saveToDisk("");
+    remapNiftiAffine(nifti, vol.hdr.affine, remap);
+    clearCachedResult();
+    resetLabelIsolation();
+    nv1.closeDrawing(); // its RAS bitmap and undo stack index the old orientation
+    setPen(-1); // closeDrawing leaves the pen armed against a null bitmap
+    while (nv1.volumes.length) await nv1.removeVolume(nv1.volumes.at(-1));
+    await nv1.loadFromArrayBuffer(nifti.buffer, `${vol.name.replace(/(_reoriented)?(\.nii)?(\.gz)?$/i, "")}_reoriented.nii`);
+  }
+
+  const reorientBtn = document.getElementById("reorientBtn");
+  if (reorientBtn) reorientBtn.onclick = openReorientModal;
 
   // Compute per-label statistics of the input image intensities within each
   // segmentation label. Single pass builds a 256-bin histogram per label
@@ -961,6 +1030,7 @@ async function main() {
     // 3D render tile no longer reads as a lighter gray box.
     backColor: [0, 0, 0, 1],
     show3Dcrosshair: true,
+    isOrientCube: true,
     onLocationChange: handleLocationChange,
   };
 
