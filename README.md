@@ -1,10 +1,10 @@
 # Brainchomp
 
 Brainchomp is a browser-only rodent brain-extraction app derived from
-[Brainchop](https://github.com/neuroneural/brainchop-test). Imaging data stays
-on the user's device.
+[Brainchop](https://brainchop.org/) ([GitHub](https://github.com/neuroneural/brainchop)).
+Imaging data stays on the user's device.
 
-Live app: [brainchomp.org](https://brainchomp.org/)
+Live app: [brainchomp.org](https://brainchomp.org/) — Working with human brain MRI? Use [Brainchop](https://brainchop.org/).
 
 ## Model and outputs
 
@@ -62,14 +62,24 @@ before discarding a segmentation, edits or pending drawing.
 
 The model is a 13-block MeshNet with 16 channels, dilations
 1,3,5,7,13,19,31,19,13,7,5,3,1, GroupNorm with a per-channel affine, GELU, and
-two output classes. brainchomp-lib runs it in a Web Worker on WebGPU (fp16,
-needs `shader-f16`), falling back to WebGL2, then to a threaded CPU module that
-only starts on cross-origin isolated pages (not GitHub Pages).
+two output classes. Inference runs inside a Web Worker from vendored
+[brainchomp-lib](https://github.com/neuroneural/brainchomp-lib):
 
-Until the library is published on npm under its final name, its build is
-vendored: `vendor/brainchomp/` holds the API (bundled with the app) and
-`public/brainchomp/` the worker and wasm modules (loaded by URL).
-`vendor/brainchomp/VERSION` records the library commit. To update:
+- **WebGPU V4 8-bit (primary, zero WASM):** pure-JS ZYCX split-plane U8×4 engine
+  with 3-tier support (`shader-f16` + flexible subgroups, `shader-f16` shared
+  memory, and `f32` fallback when `shader-f16` is absent), automatic 128 MiB
+  `LowMem128` layout, 3-layer GPU auto-detection + self-calibrating micro-probe
+  (cached 30 days), Windows WDDM TDR-safe pacing, and Layer 3 automatic
+  safe-mode retry.
+- **WebGL2 WASM (fallback):** `public/brainchomp/brainchomp-gl.wasm`, skipping
+  software rasterisers in `auto` mode.
+- **Threaded CPU WASM (fallback):** `public/brainchomp/brainchomp.wasm` on
+  cross-origin isolated pages (COOP/COEP).
+
+`vendor/brainchomp/` holds the bundled API (`index.js`) and `VERSION` (the
+upstream `brainchomp-lib` commit); `public/brainchomp/` holds `worker.js`,
+`rodent.bin`, and the WebGL2/CPU fallback WASM modules. To refresh the vendored
+copy:
 
 ```sh
 (cd ../brainchomp-lib/js && npm run build)
@@ -83,8 +93,9 @@ npm ci
 npm run dev
 ```
 
-Append `?backend=webgl2` (or `webgpu`, `cpu`) to the app URL to force one
-backend; one the browser cannot run is then reported as an error.
+Append `?backend=webgl2` (or `webgpu`, `cpu`) to force one backend, or
+`?webgpuMode=low-memory` (`standard`, `recalibrate`, `probe`) and
+`?webgpuExec=single|pipelined|paced` to override WebGPU V4 scheduling.
 
 ## License
 

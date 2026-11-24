@@ -180,7 +180,7 @@ async function localSystemDetails(statData, gl = null) {
   statData.GPU_Card_Full = await detectGPUCardType_v0(gl)
   statData.CPU_Cores = await getCPUNumCores()
   statData.Which_Brainchop = 'latest'
-  if (await isChrome()) {
+  if (await isChrome() && window.performance?.memory) {
     statData.Heap_Size_MB = window.performance.memory.totalJSHeapSize / (1024 * 1024).toFixed(2)
     statData.Used_Heap_MB = window.performance.memory.usedJSHeapSize / (1024 * 1024).toFixed(2)
     statData.Heap_Limit_MB = window.performance.memory.jsHeapSizeLimit / (1024 * 1024).toFixed(2)
@@ -191,7 +191,9 @@ async function localSystemDetails(statData, gl = null) {
     // -- check to see   if  machine has two graphics card: one is the builtin e.g. Intel Iris Pro, the other is NVIDIA GeForce GT 750M.
     // -- check browser use which one, if debugInfo is null then installed  GPU is not used
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info')
-    console.log('VENDOR WEBGL:', gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL))
+    if (debugInfo) {
+      console.log('VENDOR WEBGL:', gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL))
+    }
     statData.Texture_Size = gl.getParameter(gl.MAX_TEXTURE_SIZE) // --returns the maximum dimension the GPU can address
   } else {
     statData.Texture_Size = null

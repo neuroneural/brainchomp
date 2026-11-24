@@ -5,12 +5,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!-- DNS prefetch for external resources -->
-  <link rel="dns-prefetch" href="//cdnjs.cloudflare.com" />
-
-  <!-- Preconnect to external domains -->
-  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
-
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="./brainchomp_alpha.png" />
   <link rel="apple-touch-icon" href="./brainchomp-logo.png" />
@@ -172,7 +166,7 @@
 
       <div class="footer-status">
         <div class="footer-item">
-          <progress id="modelProgress" value="0" max="100" title="Model progress"></progress>
+          <progress id="modelProgress" value="0" max="100" aria-label="Model progress" title="Model progress"></progress>
         </div>
 
         <div class="footer-item">
@@ -184,11 +178,11 @@
             title="Detecting backend...">Checking&hellip;</span>
         </div>
 
-        <a class="star-link" href="https://github.com/neuroneural/brainchomp" target="_blank"
-          title="Star brainchomp on GitHub">
+        <a class="star-link" href="https://github.com/neuroneural/brainchomp" target="_blank" rel="noopener noreferrer"
+          title="Star Brainchomp on GitHub">
           <span class="github-star">
-            <span class="star-glyph">&#9733;</span>
-            <span id="star-count">0</span>
+            <span class="star-glyph" aria-hidden="true">&#9733;</span>
+            <span id="star-count">__BRAINCHOMP_GH_STARS__</span>
           </span>
         </a>
       </div>

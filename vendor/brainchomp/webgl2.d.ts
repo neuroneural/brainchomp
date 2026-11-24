@@ -5,6 +5,11 @@ export interface Webgl2Report {
     /** Why not, in the caller's terms. Empty when supported. */
     reasons: string[];
     renderer?: string;
+    /**
+     * True when the renderer string identifies a software rasteriser, false when
+     * `WEBGL_debug_renderer_info` confirmed hardware, undefined when masked.
+     */
+    software?: boolean;
     max3dTextureSize?: number;
     maxDrawBuffers?: number;
     maxColorAttachments?: number;

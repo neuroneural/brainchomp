@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - webgpu
+  workflow_dispatch:
 
 jobs:
   build-and-publish-live-demo:
@@ -13,7 +14,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fetch current GitHub star count for static fallback
+        id: stars
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STARS=$(gh api repos/neuroneural/brainchomp --jq '.stargazers_count' 2>/dev/null || echo 2)
+          if ! [[ "$STARS" =~ ^[0-9]+$ ]]; then
+            STARS=2
+          fi
+          echo "count=$STARS" >> "$GITHUB_OUTPUT"
+
       - name: Install and Build
+        env:
+          BRAINCHOMP_GH_STARS: ${{ steps.stars.outputs.count }}
         run: |
           npm ci
           npm run build
