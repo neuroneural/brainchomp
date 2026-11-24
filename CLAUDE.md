@@ -6,7 +6,8 @@ Browser-only rodent brain extraction (NiiVue UI + vendored brainchomp-lib). See 
 - `main.js`: app; `segment()` call, `remapNiftiAffine()`, Reorient dialog.
 - `brainchop-parameters.js`: single Skull-strip model entry.
 - `index.html`: toolbar (Reorient next to Sculpt).
-- `vendor/brainchomp/`, `public/brainchomp/`: vendored lib (see README to update).
+- `vendor/brainchomp/`: vendored [brainchomp-lib](https://github.com/neuroneural/brainchomp-lib) JS API (`index.js`, `*.d.ts`, `VERSION`).
+- `public/brainchomp/`: vendored `worker.js`, `rodent.bin` weights for pure-JS WebGPU V4, and WebGL2/CPU WASM fallback modules (refreshed via `scripts/update-brainchomp-lib.sh`).
 - `public/examples/*.nii.gz`: bundled 256³ uint8 samples.
 
 ## Orientation

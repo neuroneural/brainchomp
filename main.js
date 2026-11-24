@@ -1,43 +1,71 @@
 import { installSculptEditor } from "./sculpt/editor.js";
 import { Niivue } from "@niivue/niivue";
-import { segment, checkSupport, checkWebgl2Support } from "./vendor/brainchomp/index.js";
+import { segment, checkSupport, checkWebgl2Support, checkCpuSupport } from "./vendor/brainchomp/index.js";
 import { inferenceModelsList } from "./brainchop-parameters.js";
 import { localSystemDetails } from "./brainchop-diagnostics.js";
 import { installResponsiveLayout } from "./responsive-layout.js";
 import { installTouchViewControls } from "./touch-view.js";
 
 // --- Backend state ----------------------------------------------------------
-// brainchomp-lib (vendor/brainchomp, see scripts/update-brainchomp-lib.sh) runs
-// the whole pipeline in a worker: conform to the model's 256³ 0.1 mm LPS grid,
-// normalise, the MeshNet, largest component, mask opening, hole filling, and
-// reslicing back onto the input's grid. It picks WebGPU, then WebGL2, then a
-// threaded CPU module (cross-origin isolated pages only) before downloading
-// anything.
+// Vendored brainchomp-lib runs the full rodent pipeline in a Web Worker:
+// conform to the model's 256³ 0.1 mm LPS grid, 2/98 linear quantile normalise,
+// pure-JS WebGPU V4 8-bit MeshNet (with 3-tier f16/subgroups/f32, LowMem128,
+// 3-layer auto-detection, and Layer 3 safe-mode retry), 6-connected largest
+// component, mask opening, hole filling, and supersampled reslicing back to
+// native space. Falls back automatically to WebGL2 WASM or threaded CPU WASM
+// (COI pages).
 let lastInferenceModelEntry = null;
 let backendReport = null; // what the startup probe found, for the status chip and Diagnostics
+
+const URL_PARAMS = new URLSearchParams(window.location.search);
 
 // ?backend=webgpu|webgl2|cpu forces one backend for testing; one this browser
 // cannot run is then an error rather than a fallback.
 const FORCED_BACKEND = ["webgpu", "webgl2", "cpu"].find(
-  (b) => b === new URLSearchParams(window.location.search).get("backend"));
+  (b) => b === (URL_PARAMS.get("backend") || URL_PARAMS.get("inference") || "").toLowerCase());
 
-// The library loads worker.js and its wasm modules by URL, so they are served
-// unhashed from public/brainchomp/ rather than bundled.
+// ?webgpuMode=standard|low-memory|recalibrate|probe & ?webgpuExec=single|pipelined|paced
+const RAW_WEBGPU_MODE = (URL_PARAMS.get("webgpuMode") || URL_PARAMS.get("webgpu") || "").trim().toLowerCase();
+const WEBGPU_MODE =
+  RAW_WEBGPU_MODE === "low-memory" || RAW_WEBGPU_MODE === "lowmem" || RAW_WEBGPU_MODE === "128m"
+    ? "low-memory"
+    : RAW_WEBGPU_MODE === "standard" || RAW_WEBGPU_MODE === "std"
+      ? "standard"
+      : RAW_WEBGPU_MODE === "recalibrate" || RAW_WEBGPU_MODE === "reset"
+        ? "recalibrate"
+        : RAW_WEBGPU_MODE === "probe"
+          ? "probe"
+          : undefined;
+const WEBGPU_EXEC = ["single", "pipelined", "paced", "chunked"].find(
+  (m) => m === (URL_PARAMS.get("webgpuExec") || "").trim().toLowerCase());
+
+// Rodent weights (rodent.bin) and fallback WASM modules are served unhashed
+// from public/brainchomp/ and fetched lazily by URL.
 const BRAINCHOMP_ASSETS = new URL(`${import.meta.env.BASE_URL}brainchomp/`, window.location.href).href;
 
 const BACKEND_LABELS = { webgpu: "WebGPU", webgl2: "WebGL2", cpu: "CPU" };
 
 /**
- * Asks the library which backend this browser can run, without running it, so
+ * Asks the engine which backend this browser can run, without running it, so
  * the status chip is right before the first segmentation.
  */
 async function probeBackends() {
   const webgpu = await checkSupport().catch((e) => ({ supported: false, reasons: [e.message] }));
+  const hardwareWebGpu = Boolean(webgpu.supported && !webgpu.software);
   // checkWebgl2Support allocates a 128 MiB test texture, so only ask when needed.
-  const webgl2 = webgpu.supported ? null : checkWebgl2Support();
-  backendReport = { secureContext: window.isSecureContext, webgpu, webgl2 };
+  const webgl2 = hardwareWebGpu ? null : checkWebgl2Support();
+  const cpu = checkCpuSupport();
+  backendReport = { secureContext: window.isSecureContext, webgpu, webgl2, cpu };
   const expected = FORCED_BACKEND
-    ?? (webgpu.supported ? "webgpu" : webgl2?.supported ? "webgl2" : null);
+    ?? (hardwareWebGpu
+      ? "webgpu"
+      : webgl2?.supported && webgl2.software === false
+        ? "webgl2"
+        : cpu.supported
+          ? "cpu"
+          : webgl2?.supported && !webgl2.software
+            ? "webgl2"
+            : null);
   updateBackendStatusUI(expected);
 }
 
@@ -48,14 +76,41 @@ async function probeBackends() {
 function updateBackendStatusUI(backend) {
   const statusEl = document.getElementById('backendStatus');
   if (!statusEl) return;
-  const webgpuReasons = backendReport?.webgpu?.reasons ?? [];
-  statusEl.textContent = BACKEND_LABELS[backend] ?? "No GPU";
-  statusEl.style.color = backend === "webgpu" ? '#4CAF50' : backend ? '#FF9800' : '#F44336';
-  let tooltip = backend === "webgpu" ? 'WebGPU backend - fastest performance'
-    : backend ? `${BACKEND_LABELS[backend]} backend (fallback)` : 'Neither WebGPU nor WebGL2 can run the model here';
-  if (backend !== "webgpu" && webgpuReasons.length) tooltip += `\nWebGPU: ${webgpuReasons.join('; ')}`;
-  if (!window.isSecureContext) tooltip += '\n⚠ Not a secure context (HTTPS required)';
-  statusEl.title = tooltip;
+  const gpu = backendReport?.webgpu;
+  const gl = backendReport?.webgl2;
+  const cpu = backendReport?.cpu;
+  const webgpuReasons = gpu?.reasons ?? [];
+  if (backend === "webgpu") {
+    const tag = gpu?.hasShaderF16 ? " (F16)" : "";
+    const mem = gpu?.lowMemoryRequired ? " · LowMem" : "";
+    statusEl.textContent = `WebGPU${tag}`;
+    statusEl.style.color = '#4CAF50';
+    statusEl.title = `WebGPU V4 8-bit${tag}${mem} — fastest performance`;
+  } else if (backend === "webgl2") {
+    statusEl.textContent = "WebGL2";
+    statusEl.style.color = '#FF9800';
+    let tooltip = 'WebGL2 WASM backend (fallback)';
+    if (gpu?.software) tooltip += '\nWebGPU: software adapter skipped';
+    else if (webgpuReasons.length) tooltip += `\nWebGPU: ${webgpuReasons.join('; ')}`;
+    statusEl.title = tooltip;
+  } else if (backend === "cpu") {
+    statusEl.textContent = "CPU";
+    statusEl.style.color = '#60a5fa';
+    let tooltip = 'Threaded WebAssembly CPU backend (cross-origin isolated fallback)';
+    if (webgpuReasons.length) tooltip += `\nWebGPU: ${webgpuReasons.join('; ')}`;
+    statusEl.title = tooltip;
+  } else {
+    statusEl.textContent = "No GPU";
+    statusEl.style.color = '#F44336';
+    const lines = ['No supported compute backend detected'];
+    if (gpu?.software) lines.push('WebGPU: software adapter');
+    else if (webgpuReasons.length) lines.push(`WebGPU: ${webgpuReasons.join('; ')}`);
+    if (gl?.software) lines.push('WebGL2: software rasteriser');
+    else if (gl?.reasons?.length) lines.push(`WebGL2: ${gl.reasons.join('; ')}`);
+    if (cpu?.reasons?.length) lines.push(`CPU: ${cpu.reasons.join('; ')}`);
+    if (!window.isSecureContext) lines.push('⚠ Not a secure context (HTTPS required)');
+    statusEl.title = lines.join('\n');
+  }
 }
 
 async function main() {
@@ -219,9 +274,13 @@ async function main() {
         • Press <strong>V</strong> to cycle through views.</p>
 
         <p><strong>🐭 Rodent brain extraction</strong><br>
-        Skull-strip runs the 16-channel MeshNet once. Use the <strong>Mask</strong>
+        Skull-strip runs the 16-channel MeshNet once using our fast WebGPU V4 8-bit engine (with automatic WebGL2 / CPU fallback). Use the <strong>Mask</strong>
         toggle to switch the overlay between the extracted brain and its
         post-processed binary mask. The Save menu offers both outputs.</p>
+
+        <p><strong>🧠 Part of the Brainchop family</strong><br>
+        Working with human brain MRI? Try our sibling app <a href="https://brainchop.org/" target="_blank" rel="noopener noreferrer" style="color:#60a5fa">Brainchop</a>.
+        Source &amp; feedback: <a href="https://github.com/neuroneural/brainchomp" target="_blank" rel="noopener noreferrer" style="color:#60a5fa">neuroneural/brainchomp</a>.</p>
         
         <p><em>Inputs of any size or orientation are conformed to 256³ at 0.1 mm (LPS) for the model; the mask comes back on the image's own grid.</em></p>
       </div>
@@ -235,11 +294,15 @@ async function main() {
     // If no inference run yet, show startup diagnostics
     if (msg.length < 1 && backendReport) {
       const d = backendReport;
-      msg = ":: Startup Diagnostics ::\n";
+      msg = ":: Startup Diagnostics https://github.com/neuroneural/brainchomp/issues ::\n";
       msg += `Secure Context: ${d.secureContext}\n`;
-      msg += `WebGPU: ${d.webgpu.supported ? "yes" : `no (${d.webgpu.reasons.join("; ")})`}\n`;
-      if (d.webgpu.hasShaderF16 !== undefined) msg += `F16 Support: ${d.webgpu.hasShaderF16}\n`;
-      if (d.webgl2) msg += `WebGL2: ${d.webgl2.supported ? "yes" : `no (${d.webgl2.reasons.join("; ")})`}\n`;
+      msg += `Cross-Origin Isolated: ${window.crossOriginIsolated}\n`;
+      msg += `WebGPU: ${d.webgpu.supported ? (d.webgpu.software ? "software (skipped)" : "yes") : `no (${d.webgpu.reasons.join("; ")})`}\n`;
+      if (d.webgpu.hasShaderF16 !== undefined) msg += `WebGPU F16: ${d.webgpu.hasShaderF16}\n`;
+      if (d.webgpu.hasSubgroups !== undefined) msg += `WebGPU Subgroups: ${d.webgpu.hasSubgroups}\n`;
+      if (d.webgpu.lowMemoryRequired !== undefined) msg += `WebGPU LowMem128: ${d.webgpu.lowMemoryRequired}\n`;
+      if (d.webgl2) msg += `WebGL2: ${d.webgl2.supported ? (d.webgl2.software ? "software (skipped)" : "yes") : `no (${d.webgl2.reasons.join("; ")})`}\n`;
+      if (d.cpu) msg += `CPU WASM: ${d.cpu.supported ? "yes" : `no (${d.cpu.reasons.join("; ")})`}\n`;
       msg += `User Agent: ${navigator.userAgent}\n`;
     }
 
@@ -428,6 +491,23 @@ async function main() {
     }
   }
 
+  function parseV4PlanFromLog(log) {
+    const line = log.find((l) => /\[WebGPU-V4\]/.test(l) && /layout=/.test(l));
+    if (!line) return {};
+    const pick = (key) => {
+      const m = new RegExp(`${key}=([^\\s,;]+)`).exec(line);
+      return m ? m[1] : null;
+    };
+    const out = {};
+    const layout = pick("layout");
+    const exec = pick("exec");
+    const reason = pick("reason");
+    if (layout) out.WebGPU_V4_Layout = layout;
+    if (exec) out.WebGPU_V4_Exec = exec;
+    if (reason) out.WebGPU_V4_Reason = reason;
+    return out;
+  }
+
   async function runInference() {
     const selectedModelIndex = modelSelect.value;
     if (selectedModelIndex === "-1") return;
@@ -440,15 +520,37 @@ async function main() {
     const input = nv1.volumes[0];
     callbackUI(`${modelEntry.modelName}: running…`, 0);
     const startTime = Date.now();
+    const engineLog = [];
     const nifti = await input.saveToDisk("");
     if (modelEntry.inputWorldRemap) remapNiftiAffine(nifti, input.hdr.affine, modelEntry.inputWorldRemap);
     const result = await segment(nifti, {
       worker: true,
       backend: FORCED_BACKEND ?? "auto",
+      webgpuMode: WEBGPU_MODE,
+      webgpuExec: WEBGPU_EXEC,
       opening: modelEntry.maskOpeningRadius,
       gzipOutput: false,
       assetPath: BRAINCHOMP_ASSETS,
-      onLog: (line) => console.log("[brainchomp]", line),
+      onLog: (line) => {
+        engineLog.push(line);
+        console.log("[brainchomp]", line);
+      },
+      onProgress: (ev) => {
+        if (ev.stage === "load" && ev.progress === 0 && /webgl2|cpu/i.test(ev.message || "")) {
+          callbackUI(`${modelEntry.modelName}: ${ev.message}…`, null);
+          return;
+        }
+        if (ev.stage === "inference" && /webgl2|cpu/i.test(ev.message || "")) {
+          callbackUI(`${ev.message}…`, null);
+          return;
+        }
+        const label = ev.message
+          ? `${modelEntry.modelName}: ${ev.message}`
+          : ev.layer !== undefined && ev.totalLayers
+            ? `${modelEntry.modelName}: Layer ${ev.layer}/${ev.totalLayers}`
+            : "";
+        callbackUI(label, ev.progress);
+      },
     });
     if (nv1.volumes[0] !== input) return; // another image was loaded meanwhile
 
@@ -463,6 +565,10 @@ async function main() {
       Model: modelEntry.modelName,
       Backend: BACKEND_LABELS[result.backend],
       Worker: result.ranInWorker,
+      ...parseV4PlanFromLog(engineLog),
+      WebGPU_F16: backendReport?.webgpu?.hasShaderF16,
+      WebGPU_Subgroups: backendReport?.webgpu?.hasSubgroups,
+      Cross_Origin_Isolated: window.crossOriginIsolated,
       Inference_t: Number(seconds),
       Input_Shape: input.hdr.dims.slice(1, 4).join("x"),
       Status: "OK",
@@ -989,7 +1095,7 @@ async function main() {
       }
     }
     statData = await localSystemDetails(statData, nv1.gl);
-    diagnosticsString = ":: Diagnostics https://github.com/neuroneural/brainchop/issues ::\n";
+    diagnosticsString = ":: Diagnostics https://github.com/neuroneural/brainchomp/issues ::\n";
     for (const key in statData) {
       if (statData[key] !== null && statData[key] !== undefined) {
         diagnosticsString += `${key}: ${statData[key]}\n`;
@@ -1002,7 +1108,9 @@ async function main() {
       console.log(message);
       document.getElementById("location").innerHTML = message;
     }
-    if (isNaN(progressFrac)) {
+    if (progressFrac === null) {
+      modelProgress.removeAttribute("value");
+    } else if (isNaN(progressFrac)) {
       memstatus.style.color = "red";
       memstatus.innerHTML = "Memory Issue";
     } else if (progressFrac >= 0) {
@@ -1017,6 +1125,7 @@ async function main() {
   }
 
   function handleLocationChange(data) {
+    if (inferenceRunning) return;
     document.getElementById("location").innerHTML = data.string
       .split("   ")
       .map((value) => value.trim())
@@ -1218,9 +1327,12 @@ function showModal(title, message, opts = {}) {
 
 async function updateStarCount() {
   try {
-    const response = await fetch("https://api.github.com/repos/neuroneural/brainchop");
+    const response = await fetch("https://api.github.com/repos/neuroneural/brainchomp");
+    if (!response.ok) return;
     const data = await response.json();
-    document.getElementById("star-count").textContent = data.stargazers_count;
+    if (typeof data.stargazers_count === "number") {
+      document.getElementById("star-count").textContent = String(data.stargazers_count);
+    }
   } catch (error) {
     console.error("Error fetching star count:", error);
   }

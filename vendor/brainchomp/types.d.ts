@@ -1,15 +1,41 @@
 /**
  * What runs the model.
  *
- * `webgpu` is preferred wherever it exists: it is the fastest, and its module
- * yields to the event loop while the GPU works. `webgl2` is the fallback for
- * browsers WebGPU has not reached; it is universal but BLOCKS the calling
- * thread for the duration (use `worker: true`). `cpu` is the last resort, a
- * pthreads build of the same C the native executable runs -- bit-exact with
- * it, an order of magnitude slower than the GPU paths, and only on a
- * cross-origin isolated page.
+ * `webgpu` is preferred wherever it exists: it runs the pure-JS V4 8-bit
+ * engine (zero WASM) with 3-tier f16/subgroups/f32 shaders, 128 MiB LowMem128
+ * layout, 3-layer auto-detection, WDDM TDR-safe pacing, and Layer 3 safe-mode
+ * retry. `webgl2` is the WASM fallback for browsers WebGPU has not reached; it
+ * is universal but BLOCKS the calling thread for the duration (use
+ * `worker: true`). `cpu` is the last resort, a pthreads WASM build of the same
+ * C the native executable runs -- bit-exact with it, an order of magnitude
+ * slower than the GPU paths, and only on a cross-origin isolated page.
  */
 export type Backend = 'webgpu' | 'webgl2' | 'cpu';
+/** Pipeline stage reported to `SegmentOptions.onProgress`. */
+export type ProgressStage = 'load' | 'conform' | 'preprocess' | 'inference' | 'postprocess' | 'reslice' | 'complete';
+/** Monotonic progress event emitted during `segment()`. */
+export interface ProgressEvent {
+    stage: ProgressStage;
+    /** Overall fraction in `[0, 1]`, monotonically non-decreasing. */
+    progress: number;
+    /** Current MeshNet layer (0..totalLayers) during `inference`. */
+    layer?: number;
+    totalLayers?: number;
+    message?: string;
+}
+/**
+ * Execution-layout override for the pure-JS WebGPU V4 backend.
+ *
+ * - `'auto'` (default): 3-layer auto-detection (device limits + GPU
+ *   heuristics + cached 30-day startup probe + Layer 3 safe-mode retry).
+ * - `'standard'`: force standard ZYCX 8-bit layout.
+ * - `'low-memory'`: force LowMem128 (<= 80 MiB max buffer) + paced execution.
+ * - `'recalibrate'`: ignore cached GPU profile and re-probe if needed.
+ * - `'probe'`: force running the ~250 ms micro-benchmark calibration probe.
+ */
+export type WebGpuMode = 'auto' | 'standard' | 'low-memory' | 'recalibrate' | 'probe';
+/** Command-submission pacing mode for the pure-JS WebGPU V4 backend. */
+export type WebGpuExecMode = 'single' | 'pipelined' | 'paced';
 export interface SegmentOptions {
     /**
      * Morphological opening radius, in voxels of the model's 0.1 mm grid, which
@@ -35,11 +61,16 @@ export interface SegmentOptions {
      */
     gzipOutput?: boolean;
     /**
-     * What to run on. Defaults to `auto`: WebGPU when this browser supports it,
-     * otherwise WebGL2, otherwise the threaded CPU module. Naming one makes an
-     * unsupported choice an error rather than a silent downgrade.
+     * What to run on. Defaults to `auto`: hardware WebGPU V4 when supported,
+     * otherwise confirmed hardware WebGL2, otherwise threaded CPU, otherwise
+     * unmasked WebGL2. Naming a backend honours or refuses it rather than
+     * downgrading silently.
      */
     backend?: Backend | 'auto';
+    /** Override WebGPU V4 memory/calibration policy (default `'auto'`). */
+    webgpuMode?: WebGpuMode;
+    /** Override WebGPU V4 command submission pacing (`'single' | 'pipelined' | 'paced'`). */
+    webgpuExec?: WebGpuExecMode;
     /**
      * Run in a Web Worker instead of on the calling thread. STRONGLY RECOMMENDED
      * in a page that must stay responsive, and the only way to keep one during a
@@ -55,11 +86,11 @@ export interface SegmentOptions {
      */
     glContext?: WebGL2RenderingContext;
     /**
-     * Base URL the `.js`/`.wasm` modules (and `worker.js`) are served from.
-     * Defaults to this package's own directory, which is right for an unbundled
-     * ES module. Set it when a bundler has moved things: the files must stay
-     * adjacent and unhashed, so copy them somewhere served and point here.
-     * Must be same-origin.
+     * Base URL the model weights (`rodent.bin`), fallback `.js`/`.wasm` modules,
+     * and `worker.js` are served from. Defaults to this package's own directory,
+     * which is right for an unbundled ES module. Set it when a bundler has moved
+     * things: the files must stay adjacent and unhashed, so copy them somewhere
+     * served and point here. Must be same-origin.
      */
     assetPath?: string;
     /**
@@ -69,8 +100,10 @@ export interface SegmentOptions {
      * cancellation.
      */
     timeoutMs?: number;
-    /** Receives the module's stdout/stderr lines as they are produced. */
+    /** Receives diagnostic and module log lines as they are produced. */
     onLog?: (line: string) => void;
+    /** Receives monotonic progress updates across pipeline stages and WebGPU layers. */
+    onProgress?: (event: ProgressEvent) => void;
 }
 export interface SegmentResult {
     /**
@@ -80,7 +113,7 @@ export interface SegmentResult {
     brain: ArrayBuffer;
     /** The binary brain mask as a NIfTI file (uint8, 0/1), on the same grid. */
     mask: ArrayBuffer;
-    /** Milliseconds spent inside the wasm module, excluding device acquisition. */
+    /** Milliseconds spent inside the segmentation pipeline. */
     elapsedMs: number;
     /** Which backend actually ran, which matters when `backend` was `auto`. */
     backend: Backend;

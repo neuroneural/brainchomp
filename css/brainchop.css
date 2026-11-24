@@ -493,33 +493,63 @@ footer {
   flex-shrink: 0;
 }
 
-/* Progress Bar — slim rounded pill, always visible */
+/* Progress Bar — slim rounded pill with compositor-driven indeterminate state */
 progress {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  height: 6px;
-  width: 90px;
-  border: none;
+  block-size: 6px;
+  inline-size: 90px;
+  border: 0 solid;
   border-radius: 999px;
-  overflow: hidden;
+  overflow: clip;
   background: rgba(255, 255, 255, 0.12);
+  container-type: inline-size;
+  --progress-bar-indeterminate-size: 36%;
+  --progress-bar-indeterminate-animation-duration: 1.4s;
+
+  @media (prefers-reduced-motion: reduce) {
+    --progress-bar-indeterminate-animation-duration: 10s;
+  }
+}
+
+progress:indeterminate {
+  --progress-bar-animation: progress-bar-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear;
+}
+
+progress:dir(rtl):indeterminate {
+  --progress-bar-animation: progress-bar-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear reverse;
 }
 
 progress::-webkit-progress-bar {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
+  background: transparent;
 }
 
 progress::-webkit-progress-value {
   background: linear-gradient(90deg, #3b82f6, #60a5fa);
   border-radius: 999px;
-  transition: width 0.25s ease;
+  transition: inline-size 0.25s ease;
+  animation: var(--progress-bar-animation, revert-rule);
 }
 
 progress::-moz-progress-bar {
   background: linear-gradient(90deg, #3b82f6, #60a5fa);
   border-radius: 999px;
+  transition: inline-size 0.25s ease;
+  animation: var(--progress-bar-animation, revert-rule);
+}
+
+@keyframes progress-bar-indeterminate {
+  from, to {
+    inline-size: var(--progress-bar-indeterminate-size);
+    margin-right: auto;
+  }
+  from {
+    translate: -100%;
+  }
+  to {
+    translate: 100cqi;
+  }
 }
 
 /* GitHub star — the only interactive element in the bar */
