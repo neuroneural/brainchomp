@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - webgpu
-  schedule:
-    # Refresh the baked GitHub star count daily.
-    - cron: '23 4 * * *'
   workflow_dispatch:
 
 jobs:
